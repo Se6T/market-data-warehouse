@@ -15,6 +15,8 @@ REQUIRED_OPERATIONAL_ETFS = {
     "DVY",
     "HDV",
     "SPYD",
+    "STRC",
+    "SVIX",
 }
 
 
