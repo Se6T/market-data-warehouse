@@ -78,6 +78,7 @@ _FUTURES_PARQUET_SCHEMA = pa.schema(
 _SCHEMA_PROFILES = {
     "equity": (_BASE_COLUMNS, _PARQUET_SCHEMA, "symbol_id"),
     "volatility": (_BASE_COLUMNS, _PARQUET_SCHEMA, "symbol_id"),
+    "crypto": (_BASE_COLUMNS, _PARQUET_SCHEMA, "symbol_id"),
     "futures": (_FUTURES_COLUMNS, _FUTURES_PARQUET_SCHEMA, "contract_id"),
 }
 
