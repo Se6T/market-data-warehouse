@@ -330,9 +330,13 @@ For the Phase 3 all-universe gate, use the atomic refresh/rebuild command instea
 ```bash
 python scripts/refresh_all_and_rebuild.py \
   --as-of 2026-08-11 \
-  --inventory-path artifacts/m0-pre-refresh-inventory.json \
-  --manifest-path ~/market-warehouse/duckdb/current/manifest.json
+  --db-path ~/market-warehouse/duckdb/market.duckdb \
+  --manifest ~/market-warehouse/duckdb/current/manifest.json
 ```
+
+The stable database authority is normalized to the immutable-generation-backed
+`duckdb/current/market.duckdb` bundle. The pre-refresh inventory is written to
+`duckdb/pre-refresh-inventory.json` unless `--inventory-path` is explicitly supplied.
 
 This command inventories every active equity, futures, volatility, and crypto
 Parquet identity; records physical schemas and SHA-256 hashes; refreshes each

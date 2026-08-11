@@ -948,8 +948,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db-path", type=Path, default=warehouse / "duckdb" / "current" / "market.duckdb"
     )
-    parser.add_argument("--manifest-path", type=Path, required=True)
-    parser.add_argument("--inventory-path", type=Path, required=True)
+    parser.add_argument("--manifest", "--manifest-path", dest="manifest_path", type=Path, required=True)
+    parser.add_argument("--inventory-path", type=Path)
     parser.add_argument("--as-of", type=date.fromisoformat, required=True)
     parser.add_argument("--python", type=Path, default=warehouse / ".venv" / "bin" / "python")
     parser.add_argument("--command-timeout", type=int, default=3600)
@@ -958,11 +958,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    db_path = args.db_path
+    legacy_database = args.warehouse / "duckdb" / "market.duckdb"
+    if db_path == legacy_database:
+        db_path = args.warehouse / "duckdb" / "current" / "market.duckdb"
+    inventory_path = args.inventory_path
+    if inventory_path is None:
+        inventory_path = args.manifest_path.parent.parent / "pre-refresh-inventory.json"
     config = RefreshConfig(
         warehouse=args.warehouse,
-        db_path=args.db_path,
+        db_path=db_path,
         manifest_path=args.manifest_path,
-        inventory_path=args.inventory_path,
+        inventory_path=inventory_path,
         as_of=args.as_of,
         python=args.python,
         command_timeout=args.command_timeout,

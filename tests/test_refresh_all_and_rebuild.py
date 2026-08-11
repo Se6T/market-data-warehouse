@@ -616,6 +616,28 @@ def test_cli_status_and_secret_redaction(tmp_path: Path, capsys) -> None:
         assert m0.main(argv) == 0
 
 
+def test_cli_accepts_exact_portfolio_engine_authority_shape() -> None:
+    warehouse = Path("/home/sebastian/market-warehouse")
+    manifest = warehouse / "duckdb" / "current" / "manifest.json"
+    captured: list[m0.RefreshConfig] = []
+    argv = [
+        "--as-of",
+        "2025-01-02",
+        "--db-path",
+        str(warehouse / "duckdb" / "market.duckdb"),
+        "--manifest",
+        str(manifest),
+    ]
+
+    with patch.object(m0, "refresh_all_and_rebuild", side_effect=lambda config: captured.append(config)):
+        assert m0.main(argv) == 0
+
+    assert len(captured) == 1
+    assert captured[0].db_path == warehouse / "duckdb" / "current" / "market.duckdb"
+    assert captured[0].manifest_path == manifest
+    assert captured[0].inventory_path == warehouse / "duckdb" / "pre-refresh-inventory.json"
+
+
 @pytest.mark.parametrize("asset_class", m0.ASSET_CLASSES)
 def test_inventory_binds_each_path_to_its_canonical_internal_id(
     tmp_path: Path, asset_class: str,

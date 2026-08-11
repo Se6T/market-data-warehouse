@@ -240,9 +240,13 @@ the pre-refresh inventory, and a manifest path beside the database under the
 ```bash
 python scripts/refresh_all_and_rebuild.py \
   --as-of 2026-08-11 \
-  --inventory-path artifacts/m0-pre-refresh-inventory.json \
-  --manifest-path ~/market-warehouse/duckdb/current/manifest.json
+  --db-path ~/market-warehouse/duckdb/market.duckdb \
+  --manifest ~/market-warehouse/duckdb/current/manifest.json
 ```
+
+The stable database authority is normalized to the immutable-generation-backed
+`duckdb/current/market.duckdb` bundle. The pre-refresh inventory is written to
+`duckdb/pre-refresh-inventory.json` unless `--inventory-path` is explicitly supplied.
 
 It inventories and hashes every canonical physical Parquet file before source
 access, refreshes each identity through its owner-specific pipeline, rejects
