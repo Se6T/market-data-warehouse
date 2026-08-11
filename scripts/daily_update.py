@@ -79,7 +79,7 @@ def _fallback_client():
 
 # ── Config ─────────────────────────────────────────────────────────────
 
-DATA_LAKE = Path.home() / "market-warehouse" / "data-lake"
+DATA_LAKE = Path(os.getenv("MDW_WAREHOUSE", Path.home() / "market-warehouse")) / "data-lake"
 BRONZE_DIR = DATA_LAKE / "bronze" / "asset_class=equity"
 
 console = Console()
@@ -560,7 +560,7 @@ def main():
     # ── Trading day check ───────────────────────────────────────────
     target = resolve_target_date(today, args.target_date, args.force)
     if target is None:
-        return
+        return 0
 
     asset_class = args.asset_class
     bronze_dir = DATA_LAKE / "bronze" / f"asset_class={asset_class}"
@@ -582,14 +582,14 @@ def main():
             console.print(
                 "[yellow]No tickers found in bronze parquet. Run fetch_ib_historical.py first.[/yellow]"
             )
-            return
+            return 1
 
         # Filter to preset tickers if specified
         if preset_tickers is not None:
             latest_dates = {k: v for k, v in latest_dates.items() if k in preset_tickers}
             if not latest_dates:
                 console.print("[yellow]No preset tickers found in bronze parquet.[/yellow]")
-                return
+                return 1
 
         up_to_date, single_gap, multi_gap = classify_gaps(latest_dates, target)
         need_update = single_gap + multi_gap
@@ -601,7 +601,7 @@ def main():
 
         if not need_update:
             console.print("\n[green bold]All tickers up to date.[/green bold]\n")
-            return
+            return 0
 
         if args.dry_run:
             console.print("\n[bold]Dry run — tickers needing update:[/bold]")
@@ -610,7 +610,7 @@ def main():
                 gap = trading_days_between(date.fromisoformat(latest), target)
                 console.print(f"  {ticker:6s}  latest={latest}  gap={gap} trading days")
             console.print(f"\n[yellow]Dry run complete. {len(need_update)} tickers need updating.[/yellow]\n")
-            return
+            return 0
 
         # ── Build fetch plan ────────────────────────────────────────
         tickers_with_durations: list[tuple[str, str]] = []
@@ -741,7 +741,8 @@ def main():
         if len(total_issues) > 20:  # pragma: no cover
             console.print(f"  ... and {len(total_issues) - 20} more")
     console.print()
+    return 1 if tickers_failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

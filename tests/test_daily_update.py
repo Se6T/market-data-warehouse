@@ -932,7 +932,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            patch("scripts.daily_update.create_ib_client_or_adapter", return_value=mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -943,7 +943,7 @@ class TestMain:
             mock_date.today.return_value = today
             mock_date.fromisoformat = date.fromisoformat
             mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
-            main()
+            assert main() == 1
 
         with BronzeClient(bronze_dir=bronze_dir) as bronze:
             rows = bronze.read_symbol_rows("AAPL")

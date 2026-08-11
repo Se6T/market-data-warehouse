@@ -31,6 +31,7 @@ market-data-warehouse/              # Git repo
 │   ├── run_daily_update_job.py     # Retrying scheduled daily-update runner
 │   ├── check_daily_update_watchdog.py # Watchdog for missed/incomplete daily syncs
 │   ├── rebuild_duckdb_from_parquet.py # Offline DuckDB rebuild from bronze parquet
+│   ├── refresh_all_and_rebuild.py  # Atomic all-universe refresh, validation, manifest, and DB publish
 │   ├── run_daily_update.sh         # Shell wrapper for launchd/cron
 │   ├── run_daily_update_watchdog.sh # Shell wrapper for the daily-update watchdog
 │   ├── cerebras_client.mjs         # Cerebras incident-summary client for failure alerts
@@ -227,6 +228,33 @@ bash scripts/run_backfill_all.sh   # Runs all presets with stall detection + aut
 ```
 
 Output: per-ticker bronze Parquet at `data-lake/bronze/asset_class=equity/symbol=<ticker>/data.parquet` (or `asset_class=futures/symbol=ES_202506/data.parquet` for futures). DuckDB is rebuilt separately when needed.
+
+### Atomic all-universe refresh and rebuild
+
+Phase 3 consumers should use `scripts/refresh_all_and_rebuild.py` when they need
+a point-in-time DuckDB publication across equity, futures, volatility, and
+crypto. The command requires a requested as-of date, a new create-only path for
+the pre-refresh inventory, and a manifest path beside the database under the
+`current` bundle pointer:
+
+```bash
+python scripts/refresh_all_and_rebuild.py \
+  --as-of 2026-08-11 \
+  --inventory-path artifacts/m0-pre-refresh-inventory.json \
+  --manifest-path ~/market-warehouse/duckdb/current/manifest.json
+```
+
+It inventories and hashes every canonical physical Parquet file before source
+access, refreshes each identity through its owner-specific pipeline, rejects
+identity/date/schema drift, builds all asset classes together in a temporary
+DuckDB, validates exact schemas/types/indexes/constraints and per-identity
+counts/latest sessions, fsyncs an immutable versioned generation, and atomically
+promotes the `current` symlink as the only commit point. Stable readers call
+`resolve_current_bundle()` once and use both returned generation paths. No
+failed or interrupted run can expose a mismatched database/manifest pair; a
+pre-promotion SIGKILL can leave only an unreachable generation. The manifest contains source commit/tree,
+per-step status, pre/post inventories, physical schemas and schema hashes,
+latest sessions, row counts, and the published database SHA-256.
 
 ### Futures preset format
 

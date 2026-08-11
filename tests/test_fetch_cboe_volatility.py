@@ -277,7 +277,7 @@ class TestMain:
             patch("sys.argv", ["prog", "--symbols", "VIX", "--warehouse", str(tmp_path)]),
             patch("scripts.fetch_cboe_volatility.httpx.get", return_value=self._mock_fetch(self._SAMPLE_BARS)),
         ):
-            main()
+            assert main() == 0
 
         parquet = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VIX" / "data.parquet"
         assert parquet.exists()
@@ -331,7 +331,7 @@ class TestMain:
             patch("sys.argv", ["prog", "--symbols", "MISSING", "--warehouse", str(tmp_path)]),
             patch("scripts.fetch_cboe_volatility.httpx.get", return_value=empty_resp),
         ):
-            main()
+            assert main() == 1
 
         parquet = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=MISSING" / "data.parquet"
         assert not parquet.exists()
@@ -342,4 +342,4 @@ class TestMain:
             patch("sys.argv", ["prog", "--symbols", "BAD", "--warehouse", str(tmp_path)]),
             patch("scripts.fetch_cboe_volatility.httpx.get", side_effect=Exception("network error")),
         ):
-            main()  # Should not raise
+            assert main() == 1

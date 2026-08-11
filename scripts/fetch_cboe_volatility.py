@@ -9,7 +9,6 @@ Writes to bronze parquet in the standard warehouse format.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from datetime import date
 from pathlib import Path
@@ -19,6 +18,8 @@ import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rich.console import Console
+
+from clients.symbol_ids import stable_symbol_id
 
 console = Console()
 
@@ -32,8 +33,7 @@ ASSET_CLASS = "volatility"
 
 def _symbol_id(symbol: str) -> int:
     """Generate a stable numeric ID from symbol string."""
-    h = hashlib.sha256(symbol.encode()).hexdigest()
-    return int(h[:14], 16)
+    return stable_symbol_id(symbol)
 
 
 def fetch_cboe_historical(symbol: str) -> list[dict[str, Any]]:
@@ -148,7 +148,7 @@ def load_preset(preset_path: Path) -> list[str]:
     return data.get("tickers", [])
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -167,6 +167,7 @@ def main() -> None:
         default=DEFAULT_WAREHOUSE,
         help=f"Warehouse directory (default: {DEFAULT_WAREHOUSE})",
     )
+    parser.add_argument("--end", type=date.fromisoformat)
     args = parser.parse_args()
     
     # Determine symbols to fetch
@@ -181,12 +182,20 @@ def main() -> None:
     
     console.print(f"\n[bold]Fetching CBOE volatility indices: {symbols}[/bold]\n")
     
+    failed = 0
     for symbol in symbols:
         try:
             bars = fetch_cboe_historical(symbol)
             if not bars:
                 console.print(f"  [yellow]{symbol}: no data returned[/yellow]")
+                failed += 1
                 continue
+            if args.end is not None:
+                bars = [bar for bar in bars if date.fromisoformat(bar["date"]) <= args.end]
+                if not bars:
+                    console.print(f"  [yellow]{symbol}: no data through {args.end}[/yellow]")
+                    failed += 1
+                    continue
             
             table = bars_to_table(symbol, bars)
             write_bronze_parquet(table, symbol, args.warehouse)
@@ -197,9 +206,11 @@ def main() -> None:
             
         except Exception as e:
             console.print(f"  [red]{symbol}: error - {e}[/red]")
+            failed += 1
     
     console.print("[bold green]Done.[/bold green]")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -330,17 +330,34 @@ class DBClient:
         venue: str = "SMART",
     ) -> dict[str, int]:
         """Rebuild md.symbols and md.equities_daily from bronze parquet."""
+        return self.load_equities_from_parquet(
+            bronze_dir,
+            asset_class=asset_class,
+            venue=venue,
+            reset=True,
+        )
+
+    def load_equities_from_parquet(
+        self,
+        bronze_dir: str | Path,
+        asset_class: str,
+        venue: str,
+        *,
+        reset: bool = False,
+    ) -> dict[str, int]:
+        """Load one symbol-based asset class, optionally resetting shared tables."""
         bronze_dir = Path(bronze_dir)
         parquet_files = list(bronze_dir.glob("symbol=*/data.parquet"))
         parquet_glob = str(bronze_dir / "symbol=*/data.parquet").replace("'", "''")
 
         self._conn.execute("BEGIN")
         try:
-            # Recreate the analytical tables from scratch so repeat rebuilds do not
-            # trip DuckDB's unique index on rows scheduled for replacement.
-            self._conn.execute("DROP TABLE IF EXISTS md.equities_daily")
-            self._conn.execute("DROP TABLE IF EXISTS md.symbols")
-            self._ensure_schema()
+            if reset:
+                # Recreate the shared analytical tables once, then append the
+                # remaining symbol-based asset classes without erasing predecessors.
+                self._conn.execute("DROP TABLE IF EXISTS md.equities_daily")
+                self._conn.execute("DROP TABLE IF EXISTS md.symbols")
+                self._ensure_schema()
             if parquet_files:
                 self._conn.execute(
                     f"""
@@ -377,9 +394,13 @@ class DBClient:
         counts = self._conn.execute(
             """
             SELECT
-                (SELECT count(*) FROM md.symbols) AS symbols,
-                (SELECT count(*) FROM md.equities_daily) AS rows
-            """
+                (SELECT count(*) FROM md.symbols WHERE asset_class = ?) AS symbols,
+                (SELECT count(*)
+                 FROM md.equities_daily e
+                 JOIN md.symbols s ON s.symbol_id = e.symbol_id
+                 WHERE s.asset_class = ?) AS rows
+            """,
+            [asset_class, asset_class],
         ).fetchone()
         return {"symbols": counts[0], "rows": counts[1]}
 
@@ -388,14 +409,24 @@ class DBClient:
         bronze_dir: str | Path,
     ) -> dict[str, int]:
         """Rebuild md.futures_daily from bronze futures parquet."""
+        return self.load_futures_from_parquet(bronze_dir, reset=True)
+
+    def load_futures_from_parquet(
+        self,
+        bronze_dir: str | Path,
+        *,
+        reset: bool = False,
+    ) -> dict[str, int]:
+        """Load futures parquet, optionally resetting only the futures table."""
         bronze_dir = Path(bronze_dir)
         parquet_files = list(bronze_dir.glob("symbol=*/data.parquet"))
         parquet_glob = str(bronze_dir / "symbol=*/data.parquet").replace("'", "''")
 
         self._conn.execute("BEGIN")
         try:
-            self._conn.execute("DROP TABLE IF EXISTS md.futures_daily")
-            self._ensure_schema()
+            if reset:
+                self._conn.execute("DROP TABLE IF EXISTS md.futures_daily")
+                self._ensure_schema()
             if parquet_files:
                 self._conn.execute(
                     f"""

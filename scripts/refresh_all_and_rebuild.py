@@ -1,0 +1,982 @@
+#!/usr/bin/env python3
+"""Atomically refresh every canonical bronze identity and rebuild DuckDB."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import uuid
+from dataclasses import asdict, dataclass, replace
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Callable, Mapping, Sequence
+
+import duckdb
+import pyarrow.parquet as pq
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from clients.db_client import DBClient  # noqa: E402
+from clients.symbol_ids import stable_symbol_id  # noqa: E402
+from scripts.daily_update import is_trading_day  # noqa: E402
+
+ASSET_CLASSES = ("crypto", "equity", "futures", "volatility")
+VENUES = {"crypto": "BINANCE", "equity": "SMART", "volatility": "CBOE"}
+SYMBOL_COLUMNS = (
+    "trade_date", "symbol_id", "open", "high", "low", "close", "adj_close", "volume"
+)
+FUTURES_COLUMNS = (
+    "trade_date", "contract_id", "root_symbol", "expiry_date", "open", "high", "low",
+    "close", "settlement", "volume", "open_interest",
+)
+SYMBOL_SCHEMA = (
+    "trade_date:date32[day]", "symbol_id:int64", "open:double", "high:double",
+    "low:double", "close:double", "adj_close:double", "volume:int64",
+)
+FUTURES_SCHEMA = (
+    "trade_date:date32[day]", "contract_id:int64", "root_symbol:string",
+    "expiry_date:date32[day]", "open:double", "high:double", "low:double",
+    "close:double", "settlement:double", "volume:int64", "open_interest:int64",
+)
+DB_SCHEMAS = {
+    "symbols": ("symbol_id", "symbol", "asset_class", "venue"),
+    "equities_daily": SYMBOL_COLUMNS,
+    "futures_daily": FUTURES_COLUMNS,
+}
+DB_PHYSICAL_SCHEMAS = {
+    "symbols": (
+        ("symbol_id", "BIGINT", True, True),
+        ("symbol", "VARCHAR", False, False),
+        ("asset_class", "VARCHAR", False, False),
+        ("venue", "VARCHAR", False, False),
+    ),
+    "equities_daily": tuple(
+        (name, physical_type, False, False)
+        for name, physical_type in zip(
+            SYMBOL_COLUMNS,
+            ("DATE", "BIGINT", "DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE", "BIGINT"),
+        )
+    ),
+    "futures_daily": tuple(
+        (name, physical_type, False, False)
+        for name, physical_type in zip(
+            FUTURES_COLUMNS,
+            (
+                "DATE", "BIGINT", "VARCHAR", "DATE", "DOUBLE", "DOUBLE", "DOUBLE",
+                "DOUBLE", "DOUBLE", "BIGINT", "BIGINT",
+            ),
+        )
+    ),
+}
+DB_INDEXES = {
+    ("idx_equities_daily_dedup", True, "[trade_date, symbol_id]"),
+    ("idx_futures_daily_dedup", True, "[trade_date, contract_id]"),
+}
+DB_CONSTRAINTS = {("symbols", "PRIMARY KEY", ("symbol_id",)), ("symbols", "NOT NULL", ("symbol_id",))}
+
+
+class RefreshFailure(RuntimeError):
+    """A fail-closed M0 refresh failure safe to report to an operator."""
+
+
+class InjectedFailure(RefreshFailure):
+    """Test-only phase-boundary failure."""
+
+
+@dataclass(frozen=True)
+class InventoryEntry:
+    asset_class: str
+    symbol: str
+    path: str
+    sha256: str
+    rows: int
+    latest_session: str
+    identity_id: int
+    schema: tuple[str, ...]
+    schema_sha256: str
+
+
+@dataclass(frozen=True)
+class PublishedBundle:
+    """A reader-pinned immutable database/manifest generation."""
+
+    root: Path
+    database: Path
+    manifest: Path
+
+
+@dataclass(frozen=True)
+class RefreshConfig:
+    warehouse: Path
+    db_path: Path
+    manifest_path: Path
+    inventory_path: Path
+    as_of: date
+    python: Path
+    repo_root: Path = PROJECT_ROOT
+    command_timeout: int = 3600
+
+
+CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
+PhaseHook = Callable[[str], None]
+SourceIdentity = Callable[[Path], Mapping[str, str]]
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _canonical_bytes(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _entry_document(entry: InventoryEntry) -> dict[str, object]:
+    document: dict[str, object] = asdict(entry)
+    document["schema"] = list(entry.schema)
+    return document
+
+
+def _path_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return stat.st_dev, stat.st_ino
+
+
+def _validate_config(config: RefreshConfig) -> None:
+    paths = (config.db_path, config.manifest_path, config.inventory_path)
+    lexical = {os.path.abspath(path) for path in paths}
+    if len(lexical) != 3:
+        raise RefreshFailure("database, manifest, and inventory output paths must be distinct")
+    if config.db_path.parent != config.manifest_path.parent:
+        raise RefreshFailure("database and manifest must share one current bundle directory")
+    for path in paths:
+        if path.is_symlink():
+            raise RefreshFailure(f"output path must not be a symlink: {path}")
+    identities = [identity for path in paths if (identity := _path_identity(path)) is not None]
+    if len(identities) != len(set(identities)):
+        raise RefreshFailure("output paths are filesystem aliases")
+    bronze = (config.warehouse / "data-lake" / "bronze").resolve()
+    for path in paths:
+        resolved = path.resolve(strict=False)
+        if resolved == bronze or bronze in resolved.parents:
+            raise RefreshFailure("outputs must remain outside canonical bronze")
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_immutable(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        payload = _canonical_bytes(value)
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        os.close(descriptor)
+    _fsync_directory(path.parent)
+
+
+def discover_inventory(
+    bronze_root: Path, *, require_all_asset_classes: bool = True
+) -> list[InventoryEntry]:
+    """Discover and validate every active canonical bronze parquet identity."""
+    entries: list[InventoryEntry] = []
+    if len(ASSET_CLASSES) != len(set(ASSET_CLASSES)):
+        raise RefreshFailure("duplicate canonical bronze identities")
+    bronze_real = bronze_root.resolve(strict=True)
+    if bronze_root.is_symlink():
+        raise RefreshFailure(f"canonical bronze root must not be a symlink: {bronze_root}")
+    seen_files: dict[tuple[int, int], Path] = {}
+    seen_ids: dict[int, tuple[str, str]] = {}
+    for asset_class in ASSET_CLASSES:
+        root = bronze_root / f"asset_class={asset_class}"
+        if root.is_symlink():
+            raise RefreshFailure(f"canonical asset root must not be a symlink: {root}")
+        expected_columns = FUTURES_COLUMNS if asset_class == "futures" else SYMBOL_COLUMNS
+        expected_schema = FUTURES_SCHEMA if asset_class == "futures" else SYMBOL_SCHEMA
+        id_column = "contract_id" if asset_class == "futures" else "symbol_id"
+        for identity_dir in sorted(root.glob("symbol=*")):
+            if identity_dir.is_symlink():
+                raise RefreshFailure(f"canonical identity directory must not be a symlink: {identity_dir}")
+            path = identity_dir / "data.parquet"
+            if not path.exists():
+                continue
+            if path.is_symlink():
+                raise RefreshFailure(f"canonical parquet must not be a symlink: {path}")
+            resolved = path.resolve(strict=True)
+            if bronze_real not in resolved.parents:
+                raise RefreshFailure(f"canonical parquet escapes bronze root: {path}")
+            file_identity = _path_identity(path)
+            if file_identity in seen_files:
+                raise RefreshFailure(
+                    f"canonical parquet hard-link alias: {seen_files[file_identity]} and {path}"
+                )
+            assert file_identity is not None
+            seen_files[file_identity] = path
+            symbol = path.parent.name.removeprefix("symbol=")
+            if not symbol or path.parent.name != f"symbol={symbol}":
+                raise RefreshFailure(f"invalid bronze identity path: {path}")
+            table = pq.ParquetFile(path).read()
+            schema = tuple(f"{field.name}:{field.type}" for field in table.schema)
+            if tuple(table.column_names) != expected_columns or schema != expected_schema:
+                raise RefreshFailure(f"{asset_class}:{symbol} schema mismatch")
+            if table.num_rows <= 0:
+                raise RefreshFailure(f"{asset_class}:{symbol} has no rows")
+            dates = table.column("trade_date").to_pylist()
+            if dates != sorted(dates) or len(dates) != len(set(dates)):
+                raise RefreshFailure(f"{asset_class}:{symbol} has invalid trade_date ordering")
+            ids = set(table.column(id_column).to_pylist())
+            if len(ids) != 1:
+                raise RefreshFailure(f"{asset_class}:{symbol} has inconsistent identity IDs")
+            identity_id = int(next(iter(ids)))
+            canonical_id = stable_symbol_id(symbol)
+            if identity_id != canonical_id:
+                raise RefreshFailure(
+                    f"{asset_class}:{symbol} canonical identity ID mismatch: "
+                    f"expected {canonical_id}, observed {identity_id}"
+                )
+            previous_identity = seen_ids.get(canonical_id)
+            if previous_identity is not None and previous_identity != (asset_class, symbol):
+                raise RefreshFailure(
+                    "canonical identity ID collision: "
+                    f"{previous_identity[0]}:{previous_identity[1]} and {asset_class}:{symbol}"
+                )
+            seen_ids[canonical_id] = (asset_class, symbol)
+            entries.append(
+                InventoryEntry(
+                    asset_class=asset_class,
+                    symbol=symbol,
+                    path=path.relative_to(bronze_root).as_posix(),
+                    sha256=_sha256_file(path),
+                    rows=table.num_rows,
+                    latest_session=dates[-1].isoformat(),
+                    identity_id=canonical_id,
+                    schema=schema,
+                    schema_sha256=hashlib.sha256(_canonical_bytes(schema)).hexdigest(),
+                )
+            )
+    present = {entry.asset_class for entry in entries}
+    missing = sorted(set(ASSET_CLASSES) - present)
+    if require_all_asset_classes and missing:
+        raise RefreshFailure(f"canonical bronze inventory missing asset classes: {', '.join(missing)}")
+    identities = [(entry.asset_class, entry.symbol) for entry in entries]
+    if len(identities) != len(set(identities)):
+        raise RefreshFailure("duplicate canonical bronze identities")
+    return sorted(entries, key=lambda item: (item.asset_class, item.symbol))
+
+
+def _source_identity(repo_root: Path) -> Mapping[str, str]:
+    def git(*args: str) -> str:
+        result = subprocess.run(
+            ["git", *args], cwd=repo_root, check=True, capture_output=True, text=True
+        )
+        return result.stdout.strip()
+
+    status = git("status", "--porcelain=v1", "-z", "--untracked-files=all")
+    relevant_untracked: list[str] = []
+    tracked_drift: list[str] = []
+    for line in status.split("\0"):
+        if not line:
+            continue
+        code, path_text = line[:2], line[3:]
+        if code == "??":
+            path = Path(path_text)
+            if path.suffix in {".py", ".pyi"} or path.parts[:1] in {("clients",), ("scripts",)}:
+                relevant_untracked.append(path_text)
+        else:
+            tracked_drift.append(path_text)
+    if tracked_drift or relevant_untracked:
+        raise RefreshFailure("source tree is dirty; commit executed source before running M0")
+    commit = git("rev-parse", "HEAD")
+    tree = git("write-tree")
+    committed_tree = git("rev-parse", "HEAD^{tree}")
+    if tree != committed_tree:
+        raise RefreshFailure("source index does not match HEAD tree")
+    return {"commit": commit, "tree": tree}
+
+
+def _materialize_source_tree(repo_root: Path, tree: str, destination: Path) -> None:
+    """Extract the recorded Git tree into a private, read-only execution root."""
+    archive = subprocess.run(
+        ["git", "archive", "--format=tar", tree], cwd=repo_root, check=True,
+        capture_output=True,
+    ).stdout
+    destination.mkdir(mode=0o700)
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
+        for member in source.getmembers():
+            if not (member.isfile() or member.isdir()):
+                raise RefreshFailure(f"committed source contains unsupported link: {member.name}")
+            target = (destination / member.name).resolve(strict=False)
+            if destination.resolve() not in target.parents and target != destination.resolve():
+                raise RefreshFailure("committed source archive escapes materialization root")
+        source.extractall(destination, filter="data")
+    for path in sorted(destination.rglob("*"), reverse=True):
+        path.chmod(0o500 if path.is_dir() else 0o400)
+    destination.chmod(0o500)
+
+
+def _verify_source_identity(
+    repo_root: Path, expected: Mapping[str, str], source_identity: SourceIdentity,
+) -> None:
+    if dict(source_identity(repo_root)) != dict(expected):
+        raise RefreshFailure("source identity changed during M0 refresh")
+
+
+def _update_argv(config: RefreshConfig, entry: InventoryEntry, preset: Path) -> list[str]:
+    python = str(config.python)
+    if entry.asset_class in {"equity", "futures"}:
+        if entry.asset_class == "futures":
+            root, expiry = entry.symbol.rsplit("_", 1)
+            preset_document = {
+                "name": f"m0-{entry.asset_class}-{entry.symbol}",
+                "contracts": [{"root": root, "expiry": expiry}],
+            }
+        else:
+            preset_document = {
+                "name": f"m0-{entry.asset_class}-{entry.symbol}",
+                "tickers": [entry.symbol],
+            }
+        preset.write_bytes(_canonical_bytes(preset_document))
+        return [
+            python,
+            str(config.repo_root / "scripts" / "daily_update.py"),
+            "--asset-class", entry.asset_class,
+            "--target-date", config.as_of.isoformat(),
+            "--force",
+            "--preset", str(preset),
+        ]
+    if entry.asset_class == "volatility":
+        return [
+            python,
+            str(config.repo_root / "scripts" / "fetch_cboe_volatility.py"),
+            "--symbols", entry.symbol,
+            "--end", config.as_of.isoformat(),
+            "--warehouse", str(config.warehouse),
+        ]
+    return [
+        python,
+        str(config.repo_root / "scripts" / "fetch_binance_crypto.py"),
+        "--symbols", entry.symbol,
+        "--end", config.as_of.isoformat(),
+        "--warehouse", str(config.warehouse),
+    ]
+
+
+def _default_runner(config: RefreshConfig) -> CommandRunner:
+    def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["MDW_WAREHOUSE"] = str(config.warehouse)
+        return subprocess.run(
+            argv,
+            cwd=config.repo_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=config.command_timeout,
+            env=env,
+        )
+
+    return run
+
+
+def _refresh_inventory(
+    config: RefreshConfig,
+    inventory: Sequence[InventoryEntry],
+    command_runner: CommandRunner,
+    scratch: Path,
+    verify_source: Callable[[], None] = lambda: None,
+) -> list[dict[str, object]]:
+    steps: list[dict[str, object]] = []
+    for ordinal, entry in enumerate(inventory):
+        verify_source()
+        argv = _update_argv(config, entry, scratch / f"preset-{ordinal}.json")
+        started = _utc_now()
+        result = command_runner(argv)
+        ended = _utc_now()
+        if result.args != argv:
+            raise RefreshFailure(
+                f"{entry.asset_class}:{entry.symbol} owner reported argv mismatch"
+            )
+        step = {
+            "asset_class": entry.asset_class,
+            "symbol": entry.symbol,
+            "argv_sha256": hashlib.sha256(_canonical_bytes(argv)).hexdigest(),
+            "started_at": started,
+            "ended_at": ended,
+            "exit_code": int(result.returncode),
+            "status": "succeeded" if result.returncode == 0 else "failed",
+        }
+        steps.append(step)
+        if result.returncode != 0:
+            raise RefreshFailure(
+                f"{entry.asset_class}:{entry.symbol} update failed with exit {result.returncode}"
+            )
+    return steps
+
+
+def _validate_post_inventory(
+    before: Sequence[InventoryEntry], after: Sequence[InventoryEntry], as_of: date
+) -> None:
+    before_map = {(entry.asset_class, entry.symbol): entry for entry in before}
+    after_map = {(entry.asset_class, entry.symbol): entry for entry in after}
+    if set(before_map) != set(after_map):
+        raise RefreshFailure("inventory identities changed during refresh")
+    for identity, current in after_map.items():
+        previous = before_map[identity]
+        if current.latest_session < previous.latest_session:
+            label = f"{identity[0]}:{identity[1]}"
+            raise RefreshFailure(f"{label} latest session regressed")
+        if current.latest_session > as_of.isoformat():
+            label = f"{identity[0]}:{identity[1]}"
+            raise RefreshFailure(f"{label} latest session exceeds requested as-of")
+        expected = expected_latest_session(current.asset_class, as_of).isoformat()
+        if current.latest_session != expected:
+            label = f"{identity[0]}:{identity[1]}"
+            raise RefreshFailure(
+                f"{label} expected latest session {expected}, observed {current.latest_session}"
+            )
+
+
+def expected_latest_session(asset_class: str, as_of: date) -> date:
+    """Return the deterministic completed session required for an asset class.
+
+    Crypto has a UTC daily session.  The currently supported futures universe is
+    session-dated Monday through Friday.  Equity and CBOE volatility identities
+    use the repository's deterministic NYSE holiday calendar.
+    """
+    if asset_class == "crypto":
+        return as_of
+    if asset_class == "futures":
+        candidate = as_of
+        while candidate.weekday() >= 5:
+            candidate -= timedelta(days=1)
+        return candidate
+    if asset_class in {"equity", "volatility"}:
+        candidate = as_of
+        while not is_trading_day(candidate):
+            candidate -= timedelta(days=1)
+        return candidate
+    raise RefreshFailure(f"unsupported asset calendar: {asset_class}")
+
+
+def _build_database(config: RefreshConfig, temp_db: Path) -> None:
+    bronze = config.warehouse / "data-lake" / "bronze"
+    with DBClient(temp_db) as db:
+        first = True
+        for asset_class in ("equity", "volatility", "crypto"):
+            db.load_equities_from_parquet(
+                bronze / f"asset_class={asset_class}",
+                asset_class=asset_class,
+                venue=VENUES[asset_class],
+                reset=first,
+            )
+            first = False
+        db.load_futures_from_parquet(bronze / "asset_class=futures", reset=True)
+
+
+def validate_database(temp_db: Path, inventory: Sequence[InventoryEntry]) -> dict[str, int]:
+    """Validate exact table schemas, identity sets, row counts, and latest sessions."""
+    expected_symbol_entries = [entry for entry in inventory if entry.asset_class != "futures"]
+    expected_counts = {
+        "md.symbols": len(expected_symbol_entries),
+        "md.equities_daily": sum(entry.rows for entry in expected_symbol_entries),
+        "md.futures_daily": sum(entry.rows for entry in inventory if entry.asset_class == "futures"),
+    }
+    connection = duckdb.connect(str(temp_db), read_only=True)
+    try:
+        for table, expected_columns in DB_SCHEMAS.items():
+            rows = connection.execute(f"PRAGMA table_info('md.{table}')").fetchall()
+            physical = tuple(
+                (row[1], row[2], bool(row[3]), bool(row[5])) for row in rows
+            )
+            if (
+                tuple(row[1] for row in rows) != expected_columns
+                or physical != DB_PHYSICAL_SCHEMAS[table]
+            ):
+                raise RefreshFailure(f"md.{table} schema mismatch")
+        indexes = {
+            (name, unique, expressions)
+            for name, unique, expressions in connection.execute(
+                "SELECT index_name, is_unique, expressions FROM duckdb_indexes() "
+                "WHERE schema_name='md'"
+            ).fetchall()
+        }
+        if indexes != DB_INDEXES:
+            raise RefreshFailure("database index mismatch")
+        constraints = {
+            (table, kind, tuple(columns))
+            for table, kind, columns in connection.execute(
+                "SELECT table_name, constraint_type, constraint_column_names "
+                "FROM duckdb_constraints() WHERE schema_name='md'"
+            ).fetchall()
+        }
+        if constraints != DB_CONSTRAINTS:
+            raise RefreshFailure("database constraint mismatch")
+        actual_counts = {
+            f"md.{table}": connection.execute(f"SELECT count(*) FROM md.{table}").fetchone()[0]
+            for table in DB_SCHEMAS
+        }
+        if actual_counts != expected_counts:
+            raise RefreshFailure(
+                f"database row count mismatch: expected={expected_counts} actual={actual_counts}"
+            )
+        symbol_identities = set(
+            connection.execute("SELECT asset_class, symbol FROM md.symbols").fetchall()
+        )
+        expected_symbol_identities = {
+            (entry.asset_class, entry.symbol) for entry in expected_symbol_entries
+        }
+        if symbol_identities != expected_symbol_identities:
+            raise RefreshFailure("database symbol inventory mismatch")
+        actual_symbol_ids = set(
+            connection.execute(
+                "SELECT asset_class, symbol, symbol_id FROM md.symbols"
+            ).fetchall()
+        )
+        expected_symbol_ids = {
+            (entry.asset_class, entry.symbol, entry.identity_id)
+            for entry in expected_symbol_entries
+        }
+        if actual_symbol_ids != expected_symbol_ids:
+            raise RefreshFailure("database canonical ID mismatch for symbol inventory")
+        futures = set(
+            connection.execute(
+                "SELECT DISTINCT root_symbol || '_' || strftime(expiry_date, '%Y%m') "
+                "FROM md.futures_daily"
+            ).fetchall()
+        )
+        expected_futures = {
+            (entry.symbol,) for entry in inventory if entry.asset_class == "futures"
+        }
+        if futures != expected_futures:
+            raise RefreshFailure("database futures inventory mismatch")
+        actual_futures_ids = set(
+            connection.execute(
+                "SELECT DISTINCT root_symbol || '_' || strftime(expiry_date, '%Y%m'), "
+                "contract_id FROM md.futures_daily"
+            ).fetchall()
+        )
+        expected_futures_ids = {
+            (entry.symbol, entry.identity_id)
+            for entry in inventory if entry.asset_class == "futures"
+        }
+        if actual_futures_ids != expected_futures_ids:
+            raise RefreshFailure("database canonical ID mismatch for futures inventory")
+        actual_per_identity = {
+            (asset_class, symbol): (rows, latest.isoformat() if latest is not None else None)
+            for asset_class, symbol, rows, latest in connection.execute(
+                "SELECT s.asset_class, s.symbol, count(e.trade_date), max(e.trade_date) "
+                "FROM md.symbols s LEFT JOIN md.equities_daily e USING (symbol_id) "
+                "GROUP BY s.asset_class, s.symbol"
+            ).fetchall()
+        }
+        expected_per_identity = {
+            (entry.asset_class, entry.symbol): (entry.rows, entry.latest_session)
+            for entry in expected_symbol_entries
+        }
+        actual_per_identity.update({
+            ("futures", symbol): (rows, latest.isoformat())
+            for symbol, rows, latest in connection.execute(
+                "SELECT root_symbol || '_' || strftime(expiry_date, '%Y%m'), count(*), "
+                "max(trade_date) FROM md.futures_daily GROUP BY 1"
+            ).fetchall()
+        })
+        expected_per_identity.update({
+            (entry.asset_class, entry.symbol): (entry.rows, entry.latest_session)
+            for entry in inventory if entry.asset_class == "futures"
+        })
+        if actual_per_identity != expected_per_identity:
+            raise RefreshFailure(
+                "database per-identity mismatch: "
+                f"expected={expected_per_identity} actual={actual_per_identity}"
+            )
+        return actual_counts
+    finally:
+        connection.close()
+
+
+def _prepare_file(path: Path, payload: bytes) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    with temporary.open("xb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return temporary
+
+
+def _bundle_layout(db_path: Path, manifest_path: Path) -> tuple[Path, Path]:
+    if db_path.parent != manifest_path.parent:
+        raise RefreshFailure("database and manifest must share one current bundle directory")
+    pointer = db_path.parent
+    return pointer, pointer.parent / "bundles"
+
+
+def _recovery_marker(pointer: Path) -> Path:
+    return pointer.parent / f".{pointer.name}.recovery.json"
+
+
+def _reject_symlink_components(path: Path, label: str) -> None:
+    """Reject symlinks in ``path`` or any existing ancestor without resolving."""
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for component in absolute.parts[1:]:
+        current /= component
+        if current.is_symlink():
+            raise RefreshFailure(f"{label} must not contain symlink components")
+
+
+def _validate_bundle_root(
+    root: Path, bundles: Path, db_path: Path, manifest_path: Path,
+) -> PublishedBundle:
+    _reject_symlink_components(bundles, "immutable bundles root")
+    _reject_symlink_components(root, "current bundle generation")
+    if bundles.is_symlink() or not bundles.is_dir():
+        raise RefreshFailure("immutable bundles root must be a real directory, not a symlink")
+    if root.parent != bundles:
+        raise RefreshFailure("current bundle pointer escapes immutable bundle root")
+    if root.is_symlink():
+        raise RefreshFailure("current bundle generation must not be a symlink")
+    bundles_real = bundles.resolve(strict=True)
+    root_real = root.resolve(strict=True)
+    if root_real.parent != bundles_real or not root_real.is_dir():
+        raise RefreshFailure("current bundle pointer escapes immutable bundle root")
+    database = root / db_path.name
+    manifest = root / manifest_path.name
+    _reject_symlink_components(database, "current bundle database")
+    _reject_symlink_components(manifest, "current bundle manifest")
+    if database.is_symlink() or manifest.is_symlink():
+        raise RefreshFailure("current bundle generation files must not be symlinks")
+    if not database.is_file() or not manifest.is_file():
+        raise RefreshFailure("current bundle generation is incomplete")
+    if _path_identity(database) == _path_identity(manifest):
+        raise RefreshFailure("current database and manifest are filesystem aliases")
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    expected_hash = document.get("database_sha256")
+    if not isinstance(expected_hash, str) or _sha256_file(database) != expected_hash:
+        raise RefreshFailure("current bundle database hash mismatch")
+    return PublishedBundle(root=root_real, database=database.resolve(), manifest=manifest.resolve())
+
+
+def resolve_current_bundle(db_path: Path, manifest_path: Path) -> PublishedBundle:
+    """Pin and validate one immutable generation for a stable reader.
+
+    Readers must call this once and use the returned resolved paths for both
+    files.  Opening the two configured ``current/...`` paths independently can
+    cross a concurrent pointer promotion and is intentionally not supported.
+    """
+    pointer, bundles = _bundle_layout(db_path, manifest_path)
+    _reject_symlink_components(pointer.parent, "publication directory")
+    _reject_symlink_components(bundles, "immutable bundles root")
+    recovery = _recovery_marker(pointer)
+    if recovery.exists() or recovery.is_symlink():
+        if recovery.is_symlink() or not recovery.is_file():
+            raise RefreshFailure("bundle recovery marker is invalid")
+        try:
+            predecessor = json.loads(recovery.read_text(encoding="utf-8")).get("predecessor")
+        except (OSError, ValueError, AttributeError) as exc:
+            raise RefreshFailure("bundle recovery marker is invalid") from exc
+        if predecessor is None:
+            raise RefreshFailure("bundle publication recovery is required; no predecessor exists")
+        if not isinstance(predecessor, str) or Path(predecessor).name != predecessor:
+            raise RefreshFailure("bundle recovery predecessor is invalid")
+        published = _validate_bundle_root(
+            bundles / predecessor, bundles, db_path, manifest_path,
+        )
+        # A completed rollback (or a failure before pointer replacement) leaves
+        # both the marker and pointer naming the predecessor.  A reader may
+        # safely retire that stale guard; if cleanup fails, pinning still works.
+        if pointer.is_symlink():
+            target = Path(os.readlink(pointer))
+            pointed_root = target if target.is_absolute() else pointer.parent / target
+            if pointed_root == bundles / predecessor:
+                try:
+                    recovery.unlink()
+                    _fsync_directory(pointer.parent)
+                except BaseException:
+                    pass
+        return published
+    if not pointer.is_symlink():
+        raise RefreshFailure("current bundle pointer is missing or is not a symlink")
+    try:
+        target = Path(os.readlink(pointer))
+    except OSError as exc:
+        raise RefreshFailure("current bundle pointer is invalid") from exc
+    root = target if target.is_absolute() else pointer.parent / target
+    return _validate_bundle_root(root, bundles, db_path, manifest_path)
+
+
+def _atomic_publish_bundle(
+    temp_db: Path,
+    db_path: Path,
+    manifest_path: Path,
+    manifest: object,
+    *,
+    verify_source: Callable[[], None] = lambda: None,
+) -> None:
+    """Durably create a generation and publish it behind a recovery guard.
+
+    The recovery marker is durable before the only pointer mutation and remains
+    readable through the pointer-parent fsync and both source verifications.
+    The post-fsync source verification is the commit point.  Any
+    failure before it retains the marker and therefore pins the predecessor (or
+    fails closed for a first publication), even when pointer rollback fails.
+    Marker cleanup is post-commit housekeeping and can never negate success.
+    """
+    pointer, bundles = _bundle_layout(db_path, manifest_path)
+    if (
+        not isinstance(manifest, Mapping)
+        or manifest.get("database_sha256") != _sha256_file(temp_db)
+    ):
+        raise RefreshFailure("candidate manifest database hash mismatch")
+    _reject_symlink_components(pointer.parent, "publication directory")
+    _reject_symlink_components(bundles, "immutable bundles root")
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    _reject_symlink_components(pointer.parent, "publication directory")
+    bundles.mkdir(mode=0o700, exist_ok=True)
+    _reject_symlink_components(bundles, "immutable bundles root")
+    if bundles.is_symlink() or not bundles.is_dir():
+        raise RefreshFailure("immutable bundles root must be a real directory, not a symlink")
+    if pointer.exists() and not pointer.is_symlink():
+        raise RefreshFailure("current bundle pointer must not be a directory or regular file")
+    generation = bundles / uuid.uuid4().hex
+    generation.mkdir(mode=0o700)
+    database = generation / db_path.name
+    published_manifest = generation / manifest_path.name
+    pointer_temp = pointer.parent / f".{pointer.name}.{uuid.uuid4().hex}.tmp"
+    rollback_temp = pointer.parent / f".{pointer.name}.{uuid.uuid4().hex}.rollback"
+    recovery = _recovery_marker(pointer)
+    if recovery.exists() or recovery.is_symlink():
+        raise RefreshFailure("unresolved bundle publication recovery marker")
+    predecessor: str | None = None
+    if pointer.is_symlink():
+        predecessor = resolve_current_bundle(db_path, manifest_path).root.name
+    promoted = False
+    committed = False
+    try:
+        with temp_db.open("rb") as source, database.open("xb") as destination:
+            shutil.copyfileobj(source, destination)
+            destination.flush()
+            os.fsync(destination.fileno())
+        _write_immutable(published_manifest, manifest)
+        _fsync_directory(generation)
+        _fsync_directory(bundles)
+        pointer_temp.symlink_to(generation.relative_to(pointer.parent), target_is_directory=True)
+        _write_immutable(recovery, {"predecessor": predecessor})
+        verify_source()
+        os.replace(pointer_temp, pointer)
+        promoted = True
+        verify_source()
+        _fsync_directory(pointer.parent)
+        verify_source()
+        committed = True
+    except BaseException:
+        if promoted:
+            try:
+                if predecessor is None:
+                    if pointer.is_symlink():
+                        pointer.unlink()
+                else:
+                    rollback_temp.symlink_to(
+                        (bundles / predecessor).relative_to(pointer.parent),
+                        target_is_directory=True,
+                    )
+                    os.replace(rollback_temp, pointer)
+                _fsync_directory(pointer.parent)
+            except BaseException:
+                # The marker was already durable and remains readable.  It is
+                # the authoritative reader guard if restoration also fails.
+                pass
+        try:
+            if pointer_temp.is_symlink():
+                pointer_temp.unlink()
+        except BaseException:
+            pass
+        try:
+            if rollback_temp.is_symlink():
+                rollback_temp.unlink()
+        except BaseException:
+            pass
+        if not pointer.is_symlink() or pointer.resolve(strict=False) != generation:
+            shutil.rmtree(generation, ignore_errors=True)
+        raise
+    finally:
+        if committed:
+            # Cleanup happens strictly after the commit point.  Try both steps
+            # independently so compound cleanup faults cannot turn a committed
+            # publication into a reported failure or contradictory rollback.
+            try:
+                recovery.unlink()
+            except BaseException:
+                pass
+            try:
+                _fsync_directory(pointer.parent)
+            except BaseException:
+                pass
+
+
+def refresh_all_and_rebuild(
+    config: RefreshConfig,
+    *,
+    command_runner: CommandRunner | None = None,
+    phase_hook: PhaseHook = lambda _phase: None,
+    source_identity: SourceIdentity = _source_identity,
+) -> dict[str, object]:
+    """Execute the complete M0 transaction; publish nothing until all gates pass."""
+    _validate_config(config)
+    bronze_root = config.warehouse / "data-lake" / "bronze"
+    identity = source_identity(config.repo_root)
+    before = discover_inventory(bronze_root)
+    inventory_document = {
+        "requested_as_of": config.as_of.isoformat(),
+        "script_commit": identity["commit"],
+        "script_tree": identity["tree"],
+        "inventory": [_entry_document(entry) for entry in before],
+    }
+    _write_immutable(config.inventory_path, inventory_document)
+    phase_hook("inventory")
+
+    temp_db_parent = config.db_path.parent.parent
+    temp_db_parent.mkdir(parents=True, exist_ok=True)
+    temp_db = temp_db_parent / f".{config.db_path.name}.{uuid.uuid4().hex}.tmp"
+    try:
+        with tempfile.TemporaryDirectory(prefix="mdw-m0-") as scratch_name:
+            scratch = Path(scratch_name)
+            source_root = scratch / "mdw-source-tree"
+            _materialize_source_tree(config.repo_root, identity["tree"], source_root)
+            execution_config = replace(config, repo_root=source_root)
+            runner = command_runner or _default_runner(execution_config)
+            verify_source = lambda: _verify_source_identity(
+                config.repo_root, identity, source_identity
+            )
+            presets = scratch / "presets"
+            presets.mkdir()
+            try:
+                steps = _refresh_inventory(
+                    execution_config, before, runner, presets, verify_source
+                )
+                verify_source()
+            finally:
+                for path in source_root.rglob("*"):
+                    if path.is_dir():
+                        path.chmod(0o700)
+                source_root.chmod(0o700)
+        phase_hook("refresh")
+
+        after = discover_inventory(bronze_root, require_all_asset_classes=False)
+        _validate_post_inventory(before, after, config.as_of)
+        _build_database(config, temp_db)
+        phase_hook("rebuild")
+
+        row_counts = validate_database(temp_db, after)
+        phase_hook("validation")
+        with temp_db.open("rb") as handle:
+            os.fsync(handle.fileno())
+        db_sha256 = _sha256_file(temp_db)
+        manifest: dict[str, object] = {
+            "script_commit": identity["commit"],
+            "script_tree": identity["tree"],
+            "requested_as_of": config.as_of.isoformat(),
+            "steps": steps,
+            "pre_refresh_inventory": [_entry_document(entry) for entry in before],
+            "post_refresh_inventory": [_entry_document(entry) for entry in after],
+            "latest_sessions": {
+                f"{entry.asset_class}:{entry.symbol}": entry.latest_session for entry in after
+            },
+            "row_counts": row_counts,
+            "schemas": {
+                "bronze": {
+                    asset_class: list(
+                        FUTURES_SCHEMA if asset_class == "futures" else SYMBOL_SCHEMA
+                    )
+                    for asset_class in ASSET_CLASSES
+                },
+                "duckdb": {name: list(columns) for name, columns in DB_SCHEMAS.items()},
+            },
+            "database_sha256": db_sha256,
+            "publication": {
+                "db_path": str(config.db_path),
+                "published": True,
+                "sha256": db_sha256,
+            },
+        }
+        _verify_source_identity(config.repo_root, identity, source_identity)
+        _validate_config(config)
+        _atomic_publish_bundle(
+            temp_db,
+            config.db_path,
+            config.manifest_path,
+            manifest,
+            verify_source=verify_source,
+        )
+        return manifest
+    finally:
+        if temp_db.exists():
+            temp_db.unlink()
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    warehouse = Path.home() / "market-warehouse"
+    parser.add_argument("--warehouse", type=Path, default=warehouse)
+    parser.add_argument(
+        "--db-path", type=Path, default=warehouse / "duckdb" / "current" / "market.duckdb"
+    )
+    parser.add_argument("--manifest-path", type=Path, required=True)
+    parser.add_argument("--inventory-path", type=Path, required=True)
+    parser.add_argument("--as-of", type=date.fromisoformat, required=True)
+    parser.add_argument("--python", type=Path, default=warehouse / ".venv" / "bin" / "python")
+    parser.add_argument("--command-timeout", type=int, default=3600)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    config = RefreshConfig(
+        warehouse=args.warehouse,
+        db_path=args.db_path,
+        manifest_path=args.manifest_path,
+        inventory_path=args.inventory_path,
+        as_of=args.as_of,
+        python=args.python,
+        command_timeout=args.command_timeout,
+    )
+    try:
+        refresh_all_and_rebuild(config)
+    except RefreshFailure as exc:
+        print(f"refresh failed: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"refresh failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
