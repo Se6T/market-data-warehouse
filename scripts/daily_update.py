@@ -85,12 +85,18 @@ BRONZE_DIR = DATA_LAKE / "bronze" / "asset_class=equity"
 console = Console()
 
 
-ROOT_EXCHANGE_MAP = {
+ROOT_EXCHANGE_MAP: dict[str, str] = {
     "ES": "CME", "NQ": "CME", "RTY": "CME",
     "YM": "CBOT", "ZB": "CBOT", "ZN": "CBOT", "ZF": "CBOT",
     "CL": "NYMEX", "NG": "NYMEX",
     "GC": "COMEX", "SI": "COMEX",
 }
+
+# Symbols for which IBKR returns multiple active-looking SMART contracts.
+# Pin only after verifying the conId has current historical bars. WVE's former
+# Singapore-parent contract (212212833) was replaced by the Delaware parent on
+# 2026-08-10; unpinned qualification now resolves the current NASDAQ contract.
+EQUITY_CONID_OVERRIDES: dict[str, int] = {}
 
 
 def _make_contract(ticker: str, asset_class: str = "equity"):
@@ -101,6 +107,9 @@ def _make_contract(ticker: str, asset_class: str = "equity"):
         return Future(root, expiry, exch, "USD")
     if asset_class == "volatility":
         return Index(ticker, "CBOE", "USD")
+    con_id = EQUITY_CONID_OVERRIDES.get(ticker)
+    if con_id is not None:
+        return Stock(ticker, "SMART", "USD", conId=con_id)
     return Stock(ticker, "SMART", "USD")
 
 

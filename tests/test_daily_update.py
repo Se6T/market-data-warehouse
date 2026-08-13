@@ -45,6 +45,13 @@ import asyncio
 # ── helpers ───────────────────────────────────────────────────────────
 
 
+def test_make_contract_uses_current_wve_listing_after_redomiciliation():
+    contract = _make_contract("WVE", "equity")
+    assert contract.conId == 0
+    assert contract.symbol == "WVE"
+    assert contract.exchange == "SMART"
+
+
 def _make_bar(
     date="2025-01-02", open=150.0, high=155.0, low=149.0, close=153.0, volume=1000000
 ):
