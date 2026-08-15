@@ -46,6 +46,7 @@ def _warehouse(tmp_path: Path) -> Path:
     for asset_class, (symbol, row) in fixtures.items():
         with BronzeClient(bronze / f"asset_class={asset_class}", asset_class=asset_class) as client:
             client.replace_ticker_rows(symbol, [row])
+    warehouse.chmod(0o700)
     return warehouse
 
 
@@ -206,6 +207,7 @@ def test_stale_unlocked_refresh_lock_is_reusable(tmp_path: Path) -> None:
     config = _config(tmp_path, _warehouse(tmp_path))
     lock_path = config.warehouse / ".mdw-m0-refresh.lock"
     lock_path.write_text("stale pid metadata")
+    lock_path.chmod(0o600)
 
     manifest = m0.refresh_all_and_rebuild(
         config, command_runner=_runner([]), source_identity=_identity,
@@ -214,6 +216,35 @@ def test_stale_unlocked_refresh_lock_is_reusable(tmp_path: Path) -> None:
     assert manifest["publication"]["published"] is True
     with lock_path.open("r+b") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_refresh_lock_rejects_replaced_path_and_prevents_dual_acquisition(
+    tmp_path: Path,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    lock_path = warehouse / ".mdw-m0-refresh.lock"
+
+    with m0._warehouse_refresh_lock(warehouse):
+        held = warehouse / ".held-lock"
+        lock_path.rename(held)
+        lock_path.touch(mode=0o600)
+        with pytest.raises(m0.RefreshFailure, match="already in progress"):
+            with m0._warehouse_refresh_lock(warehouse):
+                pass
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o660, 0o666])
+def test_refresh_lock_rejects_nonrestrictive_existing_mode(
+    tmp_path: Path, mode: int,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    lock_path = warehouse / ".mdw-m0-refresh.lock"
+    lock_path.touch()
+    lock_path.chmod(mode)
+
+    with pytest.raises(m0.RefreshFailure, match="mode"):
+        with m0._warehouse_refresh_lock(warehouse):
+            pass
 
 
 @pytest.mark.parametrize("attack", ["symlink", "hardlink"])
@@ -525,6 +556,56 @@ def test_source_identity_and_default_runner_capture_output(tmp_path: Path) -> No
         "timeout": 17,
     }
     assert kwargs["env"]["MDW_WAREHOUSE"] == str(tmp_path)
+    assert not any(key.startswith("PYTHON") for key in kwargs["env"])
+    assert not any(key.startswith(("LD_", "DYLD_")) for key in kwargs["env"])
+
+
+def test_owner_executes_sealed_committed_bytes_not_mutable_materialization(
+    tmp_path: Path,
+) -> None:
+    repo, identity = _real_repo(tmp_path)
+    owner = repo / "scripts" / "fetch_binance_crypto.py"
+    owner.write_text(
+        "import os\nfrom pathlib import Path\n"
+        "Path(os.environ['MDW_WAREHOUSE'], 'owner-byte.txt').write_text('committed')\n"
+    )
+    subprocess.run(["git", "add", "scripts/fetch_binance_crypto.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "owner"], cwd=repo, check=True)
+    identity = dict(m0._source_identity(repo))
+    warehouse = tmp_path / "warehouse"
+    warehouse.mkdir()
+
+    with m0._sealed_execution_source(repo, identity) as sealed:
+        owner.write_text(
+            "import os\nfrom pathlib import Path\n"
+            "Path(os.environ['MDW_WAREHOUSE'], 'owner-byte.txt').write_text('hostile')\n"
+        )
+        config = m0.RefreshConfig(
+            warehouse, tmp_path / "db", tmp_path / "manifest", tmp_path / "inventory",
+            date(2025, 1, 2), Path(sys.executable), repo,
+            source_archive_fd=sealed.fileno(),
+        )
+        entry = m0.InventoryEntry(
+            "crypto", "BTC", "unused", "0" * 64, 1, "2025-01-02", 1,
+            ("trade_date:date32[day]",), "1" * 64,
+        )
+        argv = m0._update_argv(config, entry, tmp_path / "preset.json")
+        result = m0._default_runner(config)(argv)
+
+    assert result.returncode == 0, result.stderr
+    assert (warehouse / "owner-byte.txt").read_text() == "committed"
+    assert "-I" in argv and "-S" in argv
+
+
+def test_materialization_rejects_git_archive_attributes_transformations(
+    tmp_path: Path,
+) -> None:
+    repo, identity = _real_repo(tmp_path)
+    attributes = repo / ".git" / "info" / "attributes"
+    attributes.write_text("scripts/owner.py export-ignore\n")
+
+    with pytest.raises(m0.RefreshFailure, match="archive differs from recorded Git tree"):
+        m0._materialize_source_tree(repo, identity, tmp_path / "materialized")
 
 
 @pytest.mark.parametrize("drift", ["staged", "unstaged", "untracked_source"])
@@ -872,8 +953,10 @@ def test_source_mutation_during_owner_call_blocks_publication(tmp_path: Path) ->
     def mutate(argv: list[str]) -> subprocess.CompletedProcess[str]:
         nonlocal calls
         calls += 1
-        assert str(repo) not in argv[1]
-        assert "mdw-source-" in argv[1]
+        assert all(str(repo) not in argument for argument in argv)
+        assert argv[1:3] == ["-I", "-S"]
+        assert argv[5].startswith("/dev/fd/")
+        assert argv[6].startswith("scripts/")
         if calls == 1:
             (repo / "scripts" / "fetch_binance_crypto.py").write_text("# mutated\n")
         return subprocess.CompletedProcess(argv, 0, "", "")

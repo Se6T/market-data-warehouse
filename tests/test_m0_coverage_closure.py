@@ -19,7 +19,7 @@ from scripts import refresh_all_and_rebuild as m0
 
 def _config(tmp_path: Path) -> m0.RefreshConfig:
     warehouse = tmp_path / "warehouse"
-    warehouse.mkdir()
+    warehouse.mkdir(mode=0o700)
     current = warehouse / "duckdb" / "current"
     return m0.RefreshConfig(
         warehouse=warehouse,
@@ -448,8 +448,36 @@ def test_refresh_lock_and_run_result_reject_invalid_directory_races(tmp_path: Pa
             pass
 
     result = tmp_path / "results" / "run.json"
-    original = Path.is_dir
-    with patch.object(Path, "is_dir", lambda path: False if path == result.parent else original(path)), pytest.raises(
-        m0.RefreshFailure, match="run-result directory",
+    result.parent.mkdir()
+    result.parent.chmod(0o777)
+    with pytest.raises(m0.RefreshFailure, match="unsafe ownership or mode"):
+        m0._write_run_result(result, {"outcome": "failed"})
+
+
+def test_run_result_directory_symlink_swap_cannot_redirect_audit(
+    tmp_path: Path,
+) -> None:
+    result = tmp_path / "results" / "run.json"
+    result.parent.mkdir()
+    result.parent.chmod(0o700)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    displaced = tmp_path / "displaced-results"
+    real_open = os.open
+    attacked = False
+
+    def swap_then_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal attacked
+        if not attacked and Path(path).name == result.name:
+            attacked = True
+            result.parent.rename(displaced)
+            result.parent.symlink_to(outside, target_is_directory=True)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    with patch.object(m0.os, "open", side_effect=swap_then_open), pytest.raises(
+        m0.RefreshFailure, match="run-result directory changed",
     ):
         m0._write_run_result(result, {"outcome": "failed"})
+
+    assert attacked
+    assert not (outside / result.name).exists()
