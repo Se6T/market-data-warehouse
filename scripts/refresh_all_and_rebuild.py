@@ -1194,9 +1194,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     db_path = args.db_path
-    legacy_database = args.warehouse / "duckdb" / "market.duckdb"
-    if db_path == legacy_database:
-        db_path = args.warehouse / "duckdb" / "current" / "market.duckdb"
+    if db_path.name == "market.duckdb" and db_path.parent.name == "duckdb":
+        db_path = db_path.parent / "current" / "market.duckdb"
     inventory_path = args.inventory_path
     if inventory_path is None:
         inventory_path = args.manifest_path.parent.parent / "pre-refresh-inventory.json"
