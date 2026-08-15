@@ -175,11 +175,57 @@ def test_success_refreshes_each_identity_and_publishes_manifest(tmp_path: Path) 
     assert json.loads(pinned.manifest.read_text()) == manifest
     assert pinned.manifest.read_bytes().endswith(b"\n")
     assert len(json.loads(config.inventory_path.read_text())["inventory"]) == 4
-    [result_path] = _run_result_paths(config)
-    run_result = json.loads(result_path.read_text())
+    run_result = manifest["run_result"]
+    assert isinstance(run_result, dict)
     assert run_result["outcome"] == "succeeded"
     assert [step["status"] for step in run_result["steps"]] == ["succeeded"] * 4
-    assert result_path.stat().st_nlink == 1
+    assert len(run_result["run_id"]) == 32
+    assert _run_result_paths(config) == []
+
+
+def test_success_evidence_is_committed_with_bundle_before_external_audit_can_fail(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, _warehouse(tmp_path))
+    old = _seed_old_db(config)
+
+    with patch.object(m0, "_write_run_result", side_effect=OSError("late audit failure")) as writer:
+        manifest = m0.refresh_all_and_rebuild(
+            config, command_runner=_runner([]), source_identity=_identity,
+        )
+
+    writer.assert_not_called()
+    assert config.db_path.read_bytes() != old
+    committed = json.loads(m0.resolve_current_bundle(
+        config.db_path, config.manifest_path,
+    ).manifest.read_text())
+    assert committed["run_result"] == manifest["run_result"]
+    assert committed["run_result"]["outcome"] == "succeeded"
+    assert [step["status"] for step in committed["run_result"]["steps"]] == [
+        "succeeded",
+    ] * 4
+
+
+def test_failure_evidence_fault_preserves_original_error_and_chains_audit_fault(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, _warehouse(tmp_path))
+    old = _seed_old_db(config)
+    owner_failure = TimeoutError("owner failed")
+    audit_failure = OSError("terminal evidence fsync failed")
+
+    with patch.object(m0, "_write_run_result", side_effect=audit_failure), pytest.raises(
+        TimeoutError, match="owner failed",
+    ) as raised:
+        m0.refresh_all_and_rebuild(
+            config,
+            command_runner=lambda _argv: (_ for _ in ()).throw(owner_failure),
+            source_identity=_identity,
+        )
+
+    assert raised.value is owner_failure
+    assert raised.value.__cause__ is audit_failure
+    assert config.db_path.read_bytes() == old
 
 
 def test_whole_refresh_lock_rejects_concurrent_run_before_any_effect(tmp_path: Path) -> None:
@@ -1080,7 +1126,7 @@ def test_failed_rollback_leaves_reader_recovery_bound_to_predecessor(tmp_path: P
 
 @pytest.mark.parametrize("has_predecessor", [False, True])
 @pytest.mark.parametrize(("unlink_fails", "cleanup_fsync_fails"), [(True, False), (False, True), (True, True)])
-def test_post_commit_marker_cleanup_cannot_report_success_with_stale_reader_guard(
+def test_post_commit_marker_cleanup_faults_leave_reader_recognized_success(
     tmp_path: Path, has_predecessor: bool, unlink_fails: bool, cleanup_fsync_fails: bool,
 ) -> None:
     current = tmp_path / "published" / "current"
@@ -1096,8 +1142,12 @@ def test_post_commit_marker_cleanup_cannot_report_success_with_stale_reader_guar
     recovery = current.parent / ".current.recovery.json"
     real_unlink, real_fsync = Path.unlink, m0._fsync_directory
     parent_fsyncs = 0
+    retired_marker: bytes | None = None
 
     def unlink(path: Path, *args, **kwargs) -> None:
+        nonlocal retired_marker
+        if path == recovery:
+            retired_marker = path.read_bytes()
         if unlink_fails and path == recovery:
             raise OSError("marker unlink failed")
         real_unlink(path, *args, **kwargs)
@@ -1106,32 +1156,69 @@ def test_post_commit_marker_cleanup_cannot_report_success_with_stale_reader_guar
         nonlocal parent_fsyncs
         if path == current.parent:
             parent_fsyncs += 1
-            if cleanup_fsync_fails and parent_fsyncs == 3:
+            if cleanup_fsync_fails and parent_fsyncs == 4:
                 raise OSError("cleanup fsync failed")
         real_fsync(path)
 
     with patch.object(Path, "unlink", unlink), patch.object(
         m0, "_fsync_directory", side_effect=fsync,
     ):
-        if unlink_fails:
-            with pytest.raises(OSError, match="marker unlink failed"):
-                m0._atomic_publish_bundle(candidate, db_path, manifest_path, {
-                    "generation": "new",
-                    "database_sha256": hashlib.sha256(b"new-db").hexdigest(),
-                })
-        else:
-            m0._atomic_publish_bundle(candidate, db_path, manifest_path, {
-                "generation": "new",
-                "database_sha256": hashlib.sha256(b"new-db").hexdigest(),
-            })
-    if unlink_fails:
-        if has_predecessor:
-            assert m0.resolve_current_bundle(db_path, manifest_path).database.read_bytes() == b"old-db"
-        else:
-            with pytest.raises(m0.RefreshFailure, match="no predecessor"):
-                m0.resolve_current_bundle(db_path, manifest_path)
-    else:
-        assert m0.resolve_current_bundle(db_path, manifest_path).database.read_bytes() == b"new-db"
+        m0._atomic_publish_bundle(candidate, db_path, manifest_path, {
+            "generation": "new",
+            "database_sha256": hashlib.sha256(b"new-db").hexdigest(),
+        })
+
+    assert retired_marker is not None
+    marker_document = json.loads(retired_marker)
+    assert marker_document["state"] == "committed"
+    assert marker_document["successor"] == current.resolve().name
+    # Model a crash restoring the exact pre-unlink directory entry after a
+    # failed cleanup fsync.  A fresh production reader must still resolve the
+    # committed successor, never pin the predecessor.
+    if not recovery.exists():
+        recovery.write_bytes(retired_marker)
+    assert m0.resolve_current_bundle(db_path, manifest_path).database.read_bytes() == b"new-db"
+
+
+def test_marker_commit_failure_with_rollback_fault_never_reports_success(
+    tmp_path: Path,
+) -> None:
+    current = tmp_path / "published" / "current"
+    db_path, manifest_path = current / "market.duckdb", current / "manifest.json"
+    old = tmp_path / "old.tmp"
+    old.write_bytes(b"old-db")
+    m0._atomic_publish_bundle(old, db_path, manifest_path, {
+        "generation": "old", "database_sha256": hashlib.sha256(b"old-db").hexdigest(),
+    })
+    candidate = tmp_path / "new.tmp"
+    candidate.write_bytes(b"new-db")
+    real_replace, real_fsync = os.replace, m0._fsync_directory
+    replacements = parent_fsyncs = 0
+
+    def replace(source, destination) -> None:
+        nonlocal replacements
+        replacements += 1
+        if replacements == 3:
+            raise OSError("guard restoration failed")
+        if replacements == 4:
+            raise OSError("rollback failed")
+        real_replace(source, destination)
+
+    def fsync(path: Path) -> None:
+        nonlocal parent_fsyncs
+        if path == current.parent:
+            parent_fsyncs += 1
+            if parent_fsyncs == 3:
+                raise OSError("marker commit fsync failed")
+        real_fsync(path)
+
+    with patch.object(m0.os, "replace", side_effect=replace), patch.object(
+        m0, "_fsync_directory", side_effect=fsync,
+    ), pytest.raises(OSError, match="marker commit fsync failed"):
+        m0._atomic_publish_bundle(candidate, db_path, manifest_path, {
+            "generation": "new",
+            "database_sha256": hashlib.sha256(b"new-db").hexdigest(),
+        })
 
 
 def test_post_replace_validation_and_failed_rollback_leave_durable_reader_guard(tmp_path: Path) -> None:

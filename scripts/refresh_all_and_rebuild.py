@@ -896,9 +896,31 @@ def resolve_current_bundle(db_path: Path, manifest_path: Path) -> PublishedBundl
         if recovery.is_symlink() or not recovery.is_file():
             raise RefreshFailure("bundle recovery marker is invalid")
         try:
-            predecessor = json.loads(recovery.read_text(encoding="utf-8")).get("predecessor")
+            marker = json.loads(recovery.read_text(encoding="utf-8"))
         except (OSError, ValueError, AttributeError) as exc:
             raise RefreshFailure("bundle recovery marker is invalid") from exc
+        if not isinstance(marker, Mapping):
+            raise RefreshFailure("bundle recovery marker is invalid")
+        state = marker.get("state", "pending")
+        if state == "committed":
+            successor = marker.get("successor")
+            if not isinstance(successor, str) or Path(successor).name != successor:
+                raise RefreshFailure("bundle recovery successor is invalid")
+            if not pointer.is_symlink():
+                raise RefreshFailure("committed bundle recovery pointer is invalid")
+            try:
+                target = Path(os.readlink(pointer))
+            except OSError as exc:
+                raise RefreshFailure("committed bundle recovery pointer is invalid") from exc
+            pointed_root = target if target.is_absolute() else pointer.parent / target
+            if pointed_root != bundles / successor:
+                raise RefreshFailure("committed bundle recovery pointer does not match successor")
+            return _validate_bundle_root(
+                bundles / successor, bundles, db_path, manifest_path,
+            )
+        if state != "pending":
+            raise RefreshFailure("bundle recovery marker state is invalid")
+        predecessor = marker.get("predecessor")
         if predecessor is None:
             raise RefreshFailure("bundle publication recovery is required; no predecessor exists")
         if not isinstance(predecessor, str) or Path(predecessor).name != predecessor:
@@ -939,12 +961,12 @@ def _atomic_publish_bundle(
 ) -> None:
     """Durably create a generation and publish it behind a recovery guard.
 
-    The recovery marker is durable before the only pointer mutation and remains
-    readable through the pointer-parent fsync and both source verifications.
-    The post-fsync source verification is the commit point.  Any
-    failure before it retains the marker and therefore pins the predecessor (or
-    fails closed for a first publication), even when pointer rollback fails.
-    Marker cleanup is post-commit housekeeping and can never negate success.
+    The pending recovery marker is durable before the only pointer mutation and
+    remains reader-visible through pointer fsync and final source verification.
+    Publication commits only after that marker is atomically replaced by a
+    durable reader-recognized committed state naming the successor.  Marker
+    deletion is then idempotent housekeeping: a crash-restored marker still
+    resolves the committed successor, so cleanup faults cannot negate success.
     """
     pointer, bundles = _bundle_layout(db_path, manifest_path)
     if (
@@ -976,6 +998,9 @@ def _atomic_publish_bundle(
         predecessor = resolve_current_bundle(db_path, manifest_path).root.name
     promoted = False
     committed = False
+    pending_marker = {"state": "pending", "predecessor": predecessor}
+    committed_marker_temp: Path | None = None
+    marker_transition_started = False
     try:
         with temp_db.open("rb") as source, database.open("xb") as destination:
             shutil.copyfileobj(source, destination)
@@ -985,20 +1010,34 @@ def _atomic_publish_bundle(
         _fsync_directory(generation)
         _fsync_directory(bundles)
         pointer_temp.symlink_to(generation.relative_to(pointer.parent), target_is_directory=True)
-        _write_immutable(recovery, {"predecessor": predecessor})
+        _write_immutable(recovery, pending_marker)
         verify_source()
         os.replace(pointer_temp, pointer)
         promoted = True
         verify_source()
         _fsync_directory(pointer.parent)
         verify_source()
-        # Marker removal is part of publication success: while the marker
-        # exists readers intentionally pin the predecessor.  If unlink fails,
-        # the exception path restores the predecessor and reports failure
-        # instead of claiming publication while readers still see old data.
-        recovery.unlink()
+        committed_marker_temp = _prepare_file(
+            recovery,
+            _canonical_bytes({"state": "committed", "successor": generation.name}),
+        )
+        marker_transition_started = True
+        os.replace(committed_marker_temp, recovery)
+        committed_marker_temp = None
+        _fsync_directory(pointer.parent)
         committed = True
     except BaseException:
+        if marker_transition_started and not committed:
+            # A failed committed-marker fsync leaves its rename durability
+            # uncertain.  Restore the durable predecessor guard before pointer
+            # rollback where possible; either surviving state is fail closed.
+            try:
+                if recovery.exists() and not recovery.is_symlink():
+                    restored = _prepare_file(recovery, _canonical_bytes(pending_marker))
+                    os.replace(restored, recovery)
+                    _fsync_directory(pointer.parent)
+            except BaseException:
+                pass
         if promoted:
             try:
                 if predecessor is None:
@@ -1025,14 +1064,20 @@ def _atomic_publish_bundle(
                 rollback_temp.unlink()
         except BaseException:
             pass
+        try:
+            if committed_marker_temp is not None and committed_marker_temp.exists():
+                committed_marker_temp.unlink()
+        except BaseException:
+            pass
         if not pointer.is_symlink() or pointer.resolve(strict=False) != generation:
             shutil.rmtree(generation, ignore_errors=True)
         raise
     finally:
         if committed:
-            # The marker was removed before success was declared.  Durability
-            # cleanup is post-commit housekeeping and cannot negate success.
+            # The durable committed marker is already sufficient for every
+            # fresh reader.  Retirement is best-effort housekeeping only.
             try:
+                recovery.unlink()
                 _fsync_directory(pointer.parent)
             except BaseException:
                 pass
@@ -1217,10 +1262,43 @@ def _terminal_steps(
     return terminal
 
 
+def _run_result_document(
+    config: RefreshConfig,
+    *,
+    run_id: str,
+    started_at: str,
+    audit: Mapping[str, object],
+    failure: BaseException | None,
+) -> dict[str, object]:
+    raw_inventory = audit.get("inventory", [])
+    inventory = (
+        raw_inventory
+        if isinstance(raw_inventory, list)
+        and all(isinstance(item, InventoryEntry) for item in raw_inventory)
+        else []
+    )
+    raw_steps = audit.get("steps", [])
+    steps = raw_steps if isinstance(raw_steps, list) else []
+    identity = audit.get("identity")
+    return {
+        "run_id": run_id,
+        "requested_as_of": config.as_of.isoformat(),
+        "started_at": started_at,
+        "ended_at": _utc_now(),
+        "outcome": "failed" if failure is not None else "succeeded",
+        "failure_type": type(failure).__name__ if failure is not None else None,
+        "source_identity": dict(identity) if isinstance(identity, Mapping) else None,
+        "inventory_path": str(config.inventory_path),
+        "steps": _terminal_steps(inventory, steps),
+    }
+
+
 def _refresh_all_and_rebuild_locked(
     config: RefreshConfig,
     *,
     audit: dict[str, object],
+    run_id: str,
+    started_at: str,
     command_runner: CommandRunner | None = None,
     phase_hook: PhaseHook = lambda _phase: None,
     source_identity: SourceIdentity = _source_identity,
@@ -1315,6 +1393,13 @@ def _refresh_all_and_rebuild_locked(
                 "sha256": db_sha256,
             },
         }
+        manifest["run_result"] = _run_result_document(
+            config,
+            run_id=run_id,
+            started_at=started_at,
+            audit=audit,
+            failure=None,
+        )
         _verify_source_identity(config.repo_root, identity, source_identity)
         _validate_config(config)
         _atomic_publish_bundle(
@@ -1343,41 +1428,29 @@ def refresh_all_and_rebuild(
         result_path = _run_result_path(config, run_id)
         started_at = _utc_now()
         audit: dict[str, object] = {}
-        failure: BaseException | None = None
         try:
             return _refresh_all_and_rebuild_locked(
                 config,
                 audit=audit,
+                run_id=run_id,
+                started_at=started_at,
                 command_runner=command_runner,
                 phase_hook=phase_hook,
                 source_identity=source_identity,
             )
-        except BaseException as exc:
-            failure = exc
-            raise
-        finally:
-            raw_inventory = audit.get("inventory", [])
-            inventory = (
-                raw_inventory
-                if isinstance(raw_inventory, list)
-                and all(isinstance(item, InventoryEntry) for item in raw_inventory)
-                else []
+        except BaseException as failure:
+            document = _run_result_document(
+                config,
+                run_id=run_id,
+                started_at=started_at,
+                audit=audit,
+                failure=failure,
             )
-            raw_steps = audit.get("steps", [])
-            steps = raw_steps if isinstance(raw_steps, list) else []
-            identity = audit.get("identity")
-            document: dict[str, object] = {
-                "run_id": run_id,
-                "requested_as_of": config.as_of.isoformat(),
-                "started_at": started_at,
-                "ended_at": _utc_now(),
-                "outcome": "failed" if failure is not None else "succeeded",
-                "failure_type": type(failure).__name__ if failure is not None else None,
-                "source_identity": dict(identity) if isinstance(identity, Mapping) else None,
-                "inventory_path": str(config.inventory_path),
-                "steps": _terminal_steps(inventory, steps),
-            }
-            _write_run_result(result_path, document)
+            try:
+                _write_run_result(result_path, document)
+            except BaseException as evidence_failure:
+                raise failure from evidence_failure
+            raise
 
 
 def build_parser() -> argparse.ArgumentParser:
