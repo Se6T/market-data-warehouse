@@ -217,6 +217,16 @@ def test_archive_parsing_and_materialization_reject_links_incomplete_files_and_e
     with pytest.raises(m0.RefreshFailure, match="unsupported link"):
         m0._archive_members(_tar_with(link))
 
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w") as target:
+        directory = tarfile.TarInfo("scripts")
+        directory.type = tarfile.DIRTYPE
+        target.addfile(directory)
+        regular_member = tarfile.TarInfo("scripts/owner.py")
+        regular_member.size = len(b"owner")
+        target.addfile(regular_member, io.BytesIO(b"owner"))
+    assert m0._archive_members(archive.getvalue()) == {"scripts/owner.py": b"owner"}
+
     source = MagicMock()
     regular = MagicMock()
     regular.isdir.return_value = False
@@ -539,3 +549,173 @@ def test_run_result_directory_symlink_swap_cannot_redirect_audit(
 
     assert attacked
     assert not (outside / result.name).exists()
+
+
+@pytest.mark.parametrize(
+    ("listing", "message"),
+    [
+        (b"malformed\0", "inventory is malformed"),
+        (b"040000 tree deadbeef\tdirectory\0", "unsupported entries"),
+        (
+            b"100644 blob deadbeef\tduplicate.py\0"
+            b"100644 blob deadbeef\tduplicate.py\0",
+            "duplicate paths",
+        ),
+    ],
+)
+def test_git_tree_inventory_rejects_malformed_unsupported_and_duplicate_entries(
+    tmp_path: Path, listing: bytes, message: str,
+) -> None:
+    def git_result(_repo: Path, *args: str, text: bool = True):
+        payload = listing if "ls-tree" in args else b"payload"
+        return subprocess.CompletedProcess(args, 0, stdout=payload)
+
+    with (
+        patch.object(m0, "_validate_recorded_source"),
+        patch.object(m0, "_run_git", side_effect=git_result),
+        pytest.raises(m0.RefreshFailure, match=message),
+    ):
+        m0._git_tree_members(tmp_path, {"commit": "c", "tree": "t"})
+
+
+def test_archive_inventory_rejects_links_and_incomplete_regular_members() -> None:
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w") as target:
+        link = tarfile.TarInfo("linked.py")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "target.py"
+        target.addfile(link)
+    with pytest.raises(m0.RefreshFailure, match="unsupported link"):
+        m0._archive_tree_members(archive.getvalue())
+
+    member = MagicMock()
+    member.isdir.return_value = False
+    member.isfile.return_value = True
+    member.name = "missing.py"
+    source = MagicMock()
+    source.__enter__.return_value = source
+    source.getmembers.return_value = [member]
+    source.extractfile.return_value = None
+    with (
+        patch.object(m0.tarfile, "open", return_value=source),
+        pytest.raises(m0.RefreshFailure, match="archive is incomplete"),
+    ):
+        m0._archive_tree_members(b"archive")
+
+
+def test_refresh_lock_rejects_unsafe_root_missing_name_alias_and_post_lock_swap(
+    tmp_path: Path,
+) -> None:
+    unsafe = tmp_path / "unsafe"
+    unsafe.mkdir(mode=0o700)
+    unsafe.chmod(0o777)
+    with pytest.raises(m0.RefreshFailure, match="root has unsafe ownership or mode"):
+        with m0._warehouse_refresh_lock(unsafe):
+            pass
+
+    missing_name = tmp_path / "missing-name"
+    missing_name.mkdir(mode=0o700)
+    real_stat = os.stat
+
+    def fail_lock_stat(path, *args, dir_fd=None, follow_symlinks=True):
+        if path == ".mdw-m0-refresh.lock" and dir_fd is not None:
+            raise OSError("removed")
+        return real_stat(path, *args, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    with (
+        patch.object(m0.os, "stat", side_effect=fail_lock_stat),
+        pytest.raises(m0.RefreshFailure, match="path changed during acquisition"),
+    ):
+        with m0._warehouse_refresh_lock(missing_name):
+            pass
+
+    aliased = tmp_path / "aliased"
+    aliased.mkdir(mode=0o700)
+    lock = aliased / ".mdw-m0-refresh.lock"
+    lock.write_bytes(b"")
+    lock.chmod(0o600)
+    os.link(lock, tmp_path / "lock-alias")
+    with pytest.raises(m0.RefreshFailure, match="unalias"):
+        with m0._warehouse_refresh_lock(aliased):
+            pass
+
+    swapped = tmp_path / "swapped"
+    swapped.mkdir(mode=0o700)
+    calls = 0
+
+    def swap_after_flock(path, *args, dir_fd=None, follow_symlinks=True):
+        nonlocal calls
+        value = real_stat(path, *args, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+        if path == ".mdw-m0-refresh.lock" and dir_fd is not None:
+            calls += 1
+            if calls == 2:
+                return SimpleNamespace(st_dev=value.st_dev, st_ino=value.st_ino + 1)
+        return value
+
+    with (
+        patch.object(m0.os, "stat", side_effect=swap_after_flock),
+        pytest.raises(m0.RefreshFailure, match="path changed during acquisition"),
+    ):
+        with m0._warehouse_refresh_lock(swapped):
+            pass
+
+
+def test_run_result_fails_closed_on_directory_file_and_cleanup_faults(
+    tmp_path: Path,
+) -> None:
+    open_failure = tmp_path / "open-failure" / "run.json"
+    real_open = os.open
+
+    def fail_directory_open(path, flags, mode=0o777, *, dir_fd=None):
+        if Path(path) == open_failure.parent and dir_fd is None:
+            raise OSError("cannot open directory")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    with (
+        patch.object(m0.os, "open", side_effect=fail_directory_open),
+        pytest.raises(m0.RefreshFailure, match="real directory"),
+    ):
+        m0._write_run_result(open_failure, {"outcome": "failed"})
+
+    changed = tmp_path / "changed" / "run.json"
+    real_lstat = os.lstat
+
+    def fail_post_write_lstat(path, *args, **kwargs):
+        if Path(path) == changed.parent and changed.exists():
+            raise OSError("directory replaced")
+        return real_lstat(path, *args, **kwargs)
+
+    with (
+        patch.object(m0.os, "lstat", side_effect=fail_post_write_lstat),
+        pytest.raises(m0.RefreshFailure, match="directory changed during write"),
+    ):
+        m0._write_run_result(changed, {"outcome": "failed"})
+
+    altered = tmp_path / "altered" / "run.json"
+    real_stat = os.stat
+
+    def alter_named_file(path, *args, dir_fd=None, follow_symlinks=True):
+        value = real_stat(path, *args, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+        if path == altered.name and dir_fd is not None:
+            return SimpleNamespace(st_dev=value.st_dev, st_ino=value.st_ino + 1)
+        return value
+
+    with (
+        patch.object(m0.os, "stat", side_effect=alter_named_file),
+        pytest.raises(m0.RefreshFailure, match="file changed during write"),
+    ):
+        m0._write_run_result(altered, {"outcome": "failed"})
+
+    cleanup = tmp_path / "cleanup" / "run.json"
+
+    def fail_cleanup_lstat(path, *args, **kwargs):
+        if Path(path) == cleanup.parent and cleanup.exists():
+            raise OSError("original directory failure")
+        return real_lstat(path, *args, **kwargs)
+
+    with (
+        patch.object(m0.os, "lstat", side_effect=fail_cleanup_lstat),
+        patch.object(m0.os, "unlink", side_effect=OSError("cleanup failed")),
+        pytest.raises(m0.RefreshFailure, match="directory changed during write"),
+    ):
+        m0._write_run_result(cleanup, {"outcome": "failed"})
