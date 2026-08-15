@@ -1085,9 +1085,21 @@ def _atomic_publish_bundle(
                 pass
 
 
+def _warehouse_refresh_lock_path(warehouse: Path) -> Path:
+    absolute = Path(os.path.abspath(warehouse))
+    identity = hashlib.sha256(os.fsencode(absolute)).hexdigest()
+    return absolute.parent / f".mdw-m0-refresh-{identity}.lock"
+
+
 @contextmanager
 def _warehouse_refresh_lock(warehouse: Path):
-    _reject_symlink_components(warehouse, "warehouse refresh lock root")
+    absolute = Path(os.path.abspath(warehouse))
+    if not absolute.name:
+        raise RefreshFailure("warehouse refresh lock root must not be the filesystem root")
+    parent = absolute.parent
+    lock_path = _warehouse_refresh_lock_path(absolute)
+    _reject_symlink_components(parent, "warehouse refresh lock parent")
+
     directory_flags = os.O_RDONLY
     if hasattr(os, "O_DIRECTORY"):
         directory_flags |= os.O_DIRECTORY
@@ -1096,42 +1108,104 @@ def _warehouse_refresh_lock(warehouse: Path):
     if hasattr(os, "O_NOFOLLOW"):
         directory_flags |= os.O_NOFOLLOW
     try:
-        warehouse_fd = os.open(warehouse, directory_flags)
+        parent_fd = os.open(parent, directory_flags)
     except OSError as exc:
-        raise RefreshFailure("warehouse refresh lock root must be a real directory") from exc
+        raise RefreshFailure("warehouse refresh lock parent must be a real directory") from exc
+
+    warehouse_fd: int | None = None
     descriptor: int | None = None
     try:
+        parent_stat = os.fstat(parent_fd)
+        try:
+            named_parent = os.lstat(parent)
+        except OSError as exc:
+            raise RefreshFailure("warehouse refresh lock parent path changed") from exc
+        if (
+            not stat.S_ISDIR(parent_stat.st_mode)
+            or parent_stat.st_uid != os.geteuid()
+            or parent_stat.st_mode & 0o022
+        ):
+            raise RefreshFailure("warehouse refresh lock parent has unsafe ownership or mode")
+        if (parent_stat.st_dev, parent_stat.st_ino) != (
+            named_parent.st_dev,
+            named_parent.st_ino,
+        ):
+            raise RefreshFailure("warehouse refresh lock parent path changed")
+
+        try:
+            warehouse_fd = os.open(absolute.name, directory_flags, dir_fd=parent_fd)
+        except OSError as exc:
+            raise RefreshFailure("warehouse refresh lock root must be a real directory") from exc
         warehouse_stat = os.fstat(warehouse_fd)
         try:
-            named_warehouse = os.lstat(warehouse)
+            named_warehouse = os.stat(
+                absolute.name, dir_fd=parent_fd, follow_symlinks=False
+            )
         except OSError as exc:
-            raise RefreshFailure("warehouse refresh lock path changed during acquisition") from exc
+            raise RefreshFailure("warehouse refresh lock root changed during acquisition") from exc
         if (
             not stat.S_ISDIR(warehouse_stat.st_mode)
             or warehouse_stat.st_uid != os.geteuid()
             or warehouse_stat.st_mode & 0o022
-            or (warehouse_stat.st_dev, warehouse_stat.st_ino)
-            != (named_warehouse.st_dev, named_warehouse.st_ino)
         ):
             raise RefreshFailure("warehouse refresh lock root has unsafe ownership or mode")
+        if (warehouse_stat.st_dev, warehouse_stat.st_ino) != (
+            named_warehouse.st_dev,
+            named_warehouse.st_ino,
+        ):
+            raise RefreshFailure("warehouse refresh lock root changed during acquisition")
+
         try:
-            fcntl.flock(warehouse_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(parent_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RefreshFailure("warehouse refresh is already in progress") from exc
 
-        lock_name = ".mdw-m0-refresh.lock"
+        def validate_paths(*, acquiring: bool = False) -> None:
+            try:
+                current_parent = os.lstat(parent)
+            except OSError as exc:
+                raise RefreshFailure("warehouse refresh lock parent path changed") from exc
+            if (parent_stat.st_dev, parent_stat.st_ino) != (
+                current_parent.st_dev,
+                current_parent.st_ino,
+            ):
+                raise RefreshFailure("warehouse refresh lock parent path changed")
+            try:
+                current_warehouse = os.stat(
+                    absolute.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+            except OSError as exc:
+                message = (
+                    "warehouse refresh lock root changed during acquisition"
+                    if acquiring
+                    else "warehouse refresh lock root changed"
+                )
+                raise RefreshFailure(message) from exc
+            if (warehouse_stat.st_dev, warehouse_stat.st_ino) != (
+                current_warehouse.st_dev,
+                current_warehouse.st_ino,
+            ):
+                message = (
+                    "warehouse refresh lock root changed during acquisition"
+                    if acquiring
+                    else "warehouse refresh lock root changed"
+                )
+                raise RefreshFailure(message)
+
+        validate_paths(acquiring=True)
+
         flags = os.O_RDWR | os.O_CREAT
         if hasattr(os, "O_CLOEXEC"):
             flags |= os.O_CLOEXEC
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         try:
-            descriptor = os.open(lock_name, flags, 0o600, dir_fd=warehouse_fd)
+            descriptor = os.open(lock_path.name, flags, 0o600, dir_fd=parent_fd)
         except OSError as exc:
             raise RefreshFailure("warehouse refresh lock is unsafe or unavailable") from exc
         opened = os.fstat(descriptor)
         try:
-            named = os.stat(lock_name, dir_fd=warehouse_fd, follow_symlinks=False)
+            named = os.stat(lock_path.name, dir_fd=parent_fd, follow_symlinks=False)
         except OSError as exc:
             raise RefreshFailure("warehouse refresh lock path changed during acquisition") from exc
         if (
@@ -1149,7 +1223,7 @@ def _warehouse_refresh_lock(warehouse: Path):
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RefreshFailure("warehouse refresh is already in progress") from exc
-        named_after = os.stat(lock_name, dir_fd=warehouse_fd, follow_symlinks=False)
+        named_after = os.stat(lock_path.name, dir_fd=parent_fd, follow_symlinks=False)
         opened_after = os.fstat(descriptor)
         if (
             (opened_after.st_dev, opened_after.st_ino)
@@ -1157,11 +1231,15 @@ def _warehouse_refresh_lock(warehouse: Path):
             or opened_after.st_nlink != 1
         ):
             raise RefreshFailure("warehouse refresh lock path changed during acquisition")
-        yield
+        validate_paths(acquiring=True)
+        yield validate_paths
+        validate_paths()
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        os.close(warehouse_fd)
+        if warehouse_fd is not None:
+            os.close(warehouse_fd)
+        os.close(parent_fd)
 
 
 def _run_result_path(config: RefreshConfig, run_id: str) -> Path:
@@ -1304,8 +1382,10 @@ def _refresh_all_and_rebuild_locked(
     command_runner: CommandRunner | None = None,
     phase_hook: PhaseHook = lambda _phase: None,
     source_identity: SourceIdentity = _source_identity,
+    validate_warehouse: Callable[[], None] = lambda: None,
 ) -> dict[str, object]:
     """Execute the complete M0 transaction; publish nothing until all gates pass."""
+    validate_warehouse()
     _validate_config(config)
     bronze_root = config.warehouse / "data-lake" / "bronze"
     identity = source_identity(config.repo_root)
@@ -1342,6 +1422,7 @@ def _refresh_all_and_rebuild_locked(
                     config.repo_root, identity, source_identity
                 )
                 def verify_execution_source() -> None:
+                    validate_warehouse()
                     verify_source()
                     _verify_materialized_source_tree(config.repo_root, identity, source_root)
                 presets = scratch / "presets"
@@ -1358,8 +1439,10 @@ def _refresh_all_and_rebuild_locked(
                     source_root.chmod(0o700)
         phase_hook("refresh")
 
+        validate_warehouse()
         after = discover_inventory(bronze_root, require_all_asset_classes=False)
         _validate_post_inventory(before, after, config.as_of)
+        validate_warehouse()
         _build_database(config, temp_db)
         phase_hook("rebuild")
 
@@ -1425,7 +1508,8 @@ def refresh_all_and_rebuild(
     source_identity: SourceIdentity = _source_identity,
 ) -> dict[str, object]:
     """Run one warehouse-scoped M0 transaction with immutable terminal evidence."""
-    with _warehouse_refresh_lock(config.warehouse):
+    with _warehouse_refresh_lock(config.warehouse) as validate_warehouse:
+        validate_warehouse()
         run_id = uuid.uuid4().hex
         result_path = _run_result_path(config, run_id)
         started_at = _utc_now()
@@ -1439,8 +1523,10 @@ def refresh_all_and_rebuild(
                 command_runner=command_runner,
                 phase_hook=phase_hook,
                 source_identity=source_identity,
+                validate_warehouse=validate_warehouse,
             )
         except BaseException as failure:
+            validate_warehouse()
             document = _run_result_document(
                 config,
                 run_id=run_id,
