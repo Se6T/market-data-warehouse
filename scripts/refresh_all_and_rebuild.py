@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import fcntl
 import hashlib
 import io
@@ -115,6 +116,7 @@ class PublishedBundle:
     root: Path
     database: Path
     manifest: Path
+    bronze: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -251,7 +253,14 @@ def discover_inventory(
         raise RefreshFailure("duplicate canonical bronze identities")
     bronze_real = bronze_root.resolve(strict=True)
     if bronze_root.is_symlink():
-        raise RefreshFailure(f"canonical bronze root must not be a symlink: {bronze_root}")
+        generation_root = bronze_real.parent
+        if (
+            bronze_real.name != "bronze"
+            or generation_root.parent.name != ".mdw-m0-generations"
+            or bronze_root.name != "bronze"
+            or bronze_root.parent.name != "data-lake"
+        ):
+            raise RefreshFailure(f"canonical bronze root must not be a symlink: {bronze_root}")
     seen_files: dict[tuple[int, int], Path] = {}
     seen_ids: dict[int, tuple[str, str]] = {}
     for asset_class in ASSET_CLASSES:
@@ -883,6 +892,61 @@ def _validate_bundle_root(
     return PublishedBundle(root=root_real, database=database.resolve(), manifest=manifest.resolve())
 
 
+def _rename_exchange(left: Path, right: Path) -> None:
+    """Atomically exchange two directory entries without a missing-path window."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise RefreshFailure("atomic directory exchange is unavailable")
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+    if renameat2(-100, os.fsencode(left), -100, os.fsencode(right), 2) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(left), str(right))
+
+
+def _shared_layout(config: RefreshConfig) -> tuple[Path, Path, Path]:
+    authority = config.warehouse / ".mdw-m0-current"
+    return authority, config.warehouse / ".mdw-m0-generations", config.warehouse / ".mdw-m0.recovery.json"
+
+
+def _validate_shared_generation(config: RefreshConfig, root: Path) -> PublishedBundle:
+    _authority, generations, _recovery = _shared_layout(config)
+    root_real = root.resolve(strict=True)
+    if root_real.parent != generations.resolve(strict=True) or root_real.is_symlink():
+        raise RefreshFailure("shared generation escapes immutable generation root")
+    bronze = root_real / "bronze"
+    database = root_real / "duckdb" / config.db_path.name
+    manifest = root_real / "duckdb" / config.manifest_path.name
+    if not bronze.is_dir() or not database.is_file() or not manifest.is_file():
+        raise RefreshFailure("shared generation is incomplete")
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    if document.get("database_sha256") != _sha256_file(database):
+        raise RefreshFailure("shared generation database hash mismatch")
+    inventory = discover_inventory(bronze)
+    hashes = {entry.path: entry.sha256 for entry in inventory}
+    if document.get("bronze_sha256") != hashlib.sha256(_canonical_bytes(hashes)).hexdigest():
+        raise RefreshFailure("shared generation bronze hash mismatch")
+    return PublishedBundle(root_real, database, manifest, bronze)
+
+
+def _resolve_shared_bundle(config: RefreshConfig) -> PublishedBundle | None:
+    authority, generations, recovery = _shared_layout(config)
+    if not authority.is_symlink():
+        return None
+    target = Path(os.readlink(authority))
+    pointed = target if target.is_absolute() else authority.parent / target
+    selected = pointed
+    if recovery.exists():
+        marker = json.loads(recovery.read_text(encoding="utf-8"))
+        state = marker.get("state")
+        name = marker.get("successor" if state == "committed" else "predecessor")
+        if state not in {"pending", "committed"} or not isinstance(name, str) or Path(name).name != name:
+            raise RefreshFailure("shared publication recovery marker is invalid")
+        selected = generations / name
+    return _validate_shared_generation(config, selected)
+
+
 def resolve_current_bundle(db_path: Path, manifest_path: Path) -> PublishedBundle:
     """Pin and validate one immutable generation for a stable reader.
 
@@ -890,6 +954,17 @@ def resolve_current_bundle(db_path: Path, manifest_path: Path) -> PublishedBundl
     files.  Opening the two configured ``current/...`` paths independently can
     cross a concurrent pointer promotion and is intentionally not supported.
     """
+    inferred_warehouse = db_path.parent.parent.parent
+    shared = _resolve_shared_bundle(RefreshConfig(
+        warehouse=inferred_warehouse,
+        db_path=db_path,
+        manifest_path=manifest_path,
+        inventory_path=inferred_warehouse / ".unused-inventory",
+        as_of=date.min,
+        python=Path(sys.executable),
+    ))
+    if shared is not None:
+        return shared
     pointer, bundles = _bundle_layout(db_path, manifest_path)
     _reject_symlink_components(pointer.parent, "publication directory")
     _reject_symlink_components(bundles, "immutable bundles root")
@@ -951,6 +1026,153 @@ def resolve_current_bundle(db_path: Path, manifest_path: Path) -> PublishedBundl
         raise RefreshFailure("current bundle pointer is invalid") from exc
     root = target if target.is_absolute() else pointer.parent / target
     return _validate_bundle_root(root, bundles, db_path, manifest_path)
+
+
+def _fsync_tree(root: Path) -> None:
+    for path in sorted(root.rglob("*"), reverse=True):
+        if path.is_file():
+            with path.open("rb") as handle:
+                os.fsync(handle.fileno())
+        elif path.is_dir():
+            _fsync_directory(path)
+    _fsync_directory(root)
+
+
+def _install_shared_paths(
+    config: RefreshConfig,
+    fallback_db: Path | None = None,
+    fallback_manifest: Mapping[str, object] | None = None,
+) -> PublishedBundle:
+    """One-time content-preserving migration to static paths behind one pointer."""
+    authority, generations, recovery = _shared_layout(config)
+    canonical_bronze = config.warehouse / "data-lake" / "bronze"
+    if authority.is_symlink():
+        published = _resolve_shared_bundle(config)
+        assert published is not None
+    else:
+        if recovery.exists() or recovery.is_symlink():
+            raise RefreshFailure("unresolved shared publication recovery marker")
+        legacy = (
+            resolve_current_bundle(config.db_path, config.manifest_path)
+            if config.db_path.parent.is_symlink()
+            else None
+        )
+        inventory = discover_inventory(canonical_bronze)
+        hashes = {entry.path: entry.sha256 for entry in inventory}
+        generations.mkdir(mode=0o700, exist_ok=True)
+        root = generations / uuid.uuid4().hex
+        root.mkdir(mode=0o700)
+        shutil.copytree(canonical_bronze, root / "bronze", copy_function=shutil.copy2)
+        duckdb_root = root / "duckdb"
+        duckdb_root.mkdir()
+        source_db = legacy.database if legacy is not None else fallback_db
+        if source_db is None or fallback_manifest is None and legacy is None:
+            raise RefreshFailure("first shared publication requires a complete candidate")
+        shutil.copy2(source_db, duckdb_root / config.db_path.name)
+        predecessor_manifest = (
+            json.loads(legacy.manifest.read_text(encoding="utf-8"))
+            if legacy is not None
+            else dict(fallback_manifest or {})
+        )
+        predecessor_manifest["bronze_sha256"] = hashlib.sha256(
+            _canonical_bytes(hashes)
+        ).hexdigest()
+        _write_immutable(duckdb_root / config.manifest_path.name, predecessor_manifest)
+        _fsync_tree(root)
+        _fsync_directory(generations)
+        authority_temp = config.warehouse / f".{authority.name}.{uuid.uuid4().hex}.tmp"
+        authority_temp.symlink_to(root.relative_to(config.warehouse), target_is_directory=True)
+        os.replace(authority_temp, authority)
+        _fsync_directory(config.warehouse)
+        published = _validate_shared_generation(config, root)
+
+    bronze_target = Path("..") / authority.name / "bronze"
+    expected_bronze = published.bronze
+    if canonical_bronze.resolve() != expected_bronze:
+        bronze_temp = canonical_bronze.parent / f".bronze.{uuid.uuid4().hex}.swap"
+        bronze_temp.symlink_to(bronze_target, target_is_directory=True)
+        _rename_exchange(bronze_temp, canonical_bronze)
+        _fsync_directory(canonical_bronze.parent)
+        if bronze_temp.is_dir() and not bronze_temp.is_symlink():
+            shutil.rmtree(bronze_temp)
+    db_pointer = config.db_path.parent
+    db_target = Path("..") / authority.name / "duckdb"
+    if db_pointer.resolve() != published.database.parent:
+        db_temp = db_pointer.parent / f".{db_pointer.name}.{uuid.uuid4().hex}.tmp"
+        db_temp.symlink_to(db_target, target_is_directory=True)
+        os.replace(db_temp, db_pointer)
+        _fsync_directory(db_pointer.parent)
+    return published
+
+
+def _atomic_publish_shared_generation(
+    config: RefreshConfig,
+    staged_bronze: Path,
+    temp_db: Path,
+    manifest: Mapping[str, object],
+    *,
+    verify_source: Callable[[], None] = lambda: None,
+) -> None:
+    predecessor = _install_shared_paths(config, temp_db, manifest)
+    authority, generations, recovery = _shared_layout(config)
+    if recovery.exists() or recovery.is_symlink():
+        raise RefreshFailure("unresolved shared publication recovery marker")
+    root = generations / uuid.uuid4().hex
+    root.mkdir(mode=0o700)
+    shutil.copytree(staged_bronze, root / "bronze", copy_function=shutil.copy2)
+    duckdb_root = root / "duckdb"
+    duckdb_root.mkdir()
+    shutil.copy2(temp_db, duckdb_root / config.db_path.name)
+    _write_immutable(duckdb_root / config.manifest_path.name, manifest)
+    _fsync_tree(root)
+    _fsync_directory(generations)
+    _validate_shared_generation(config, root)
+    pointer_temp = config.warehouse / f".{authority.name}.{uuid.uuid4().hex}.tmp"
+    rollback_temp = config.warehouse / f".{authority.name}.{uuid.uuid4().hex}.rollback"
+    pointer_temp.symlink_to(root.relative_to(config.warehouse), target_is_directory=True)
+    _write_immutable(recovery, {"state": "pending", "predecessor": predecessor.root.name})
+    promoted = False
+    committed = False
+    try:
+        verify_source()
+        os.replace(pointer_temp, authority)
+        promoted = True
+        _fsync_directory(config.warehouse)
+        verify_source()
+        committed_temp = _prepare_file(
+            recovery,
+            _canonical_bytes({"state": "committed", "successor": root.name}),
+        )
+        os.replace(committed_temp, recovery)
+        _fsync_directory(config.warehouse)
+        committed = True
+    except BaseException:
+        if promoted:
+            try:
+                rollback_temp.symlink_to(
+                    generations.joinpath(predecessor.root.name).relative_to(config.warehouse),
+                    target_is_directory=True,
+                )
+                os.replace(rollback_temp, authority)
+                _fsync_directory(config.warehouse)
+            except BaseException:
+                pass
+        raise
+    finally:
+        for temporary in (pointer_temp, rollback_temp):
+            try:
+                if temporary.is_symlink():
+                    temporary.unlink()
+            except BaseException:
+                pass
+        if committed:
+            try:
+                recovery.unlink()
+                _fsync_directory(config.warehouse)
+            except BaseException:
+                pass
+        elif authority.resolve(strict=False) != root:
+            shutil.rmtree(root, ignore_errors=True)
 
 
 def _atomic_publish_bundle(
@@ -1404,16 +1626,20 @@ def _refresh_all_and_rebuild_locked(
     temp_db_parent = config.db_path.parent.parent
     temp_db_parent.mkdir(parents=True, exist_ok=True)
     temp_db = temp_db_parent / f".{config.db_path.name}.{uuid.uuid4().hex}.tmp"
+    staged_warehouse = Path(tempfile.mkdtemp(prefix="mdw-m0-warehouse-"))
+    staged_bronze = staged_warehouse / "data-lake" / "bronze"
     steps: list[dict[str, object]] = []
     audit["steps"] = steps
     try:
+        shutil.copytree(bronze_root, staged_bronze, copy_function=shutil.copy2)
+        candidate_config = replace(config, warehouse=staged_warehouse)
         with tempfile.TemporaryDirectory(prefix="mdw-m0-") as scratch_name:
             scratch = Path(scratch_name)
             source_root = scratch / "mdw-source-tree"
             _materialize_source_tree(config.repo_root, identity, source_root)
             with _sealed_execution_source(config.repo_root, identity) as sealed_source:
                 execution_config = replace(
-                    config,
+                    candidate_config,
                     repo_root=source_root,
                     source_archive_fd=sealed_source.fileno(),
                 )
@@ -1440,10 +1666,10 @@ def _refresh_all_and_rebuild_locked(
         phase_hook("refresh")
 
         validate_warehouse()
-        after = discover_inventory(bronze_root, require_all_asset_classes=False)
+        after = discover_inventory(staged_bronze, require_all_asset_classes=False)
         _validate_post_inventory(before, after, config.as_of)
         validate_warehouse()
-        _build_database(config, temp_db)
+        _build_database(candidate_config, temp_db)
         phase_hook("rebuild")
 
         row_counts = validate_database(temp_db, after)
@@ -1451,6 +1677,7 @@ def _refresh_all_and_rebuild_locked(
         with temp_db.open("rb") as handle:
             os.fsync(handle.fileno())
         db_sha256 = _sha256_file(temp_db)
+        bronze_hashes = {entry.path: entry.sha256 for entry in after}
         manifest: dict[str, object] = {
             "script_commit": identity["commit"],
             "script_tree": identity["tree"],
@@ -1472,6 +1699,7 @@ def _refresh_all_and_rebuild_locked(
                 "duckdb": {name: list(columns) for name, columns in DB_SCHEMAS.items()},
             },
             "database_sha256": db_sha256,
+            "bronze_sha256": hashlib.sha256(_canonical_bytes(bronze_hashes)).hexdigest(),
             "publication": {
                 "db_path": str(config.db_path),
                 "published": True,
@@ -1487,10 +1715,10 @@ def _refresh_all_and_rebuild_locked(
         )
         _verify_source_identity(config.repo_root, identity, source_identity)
         _validate_config(config)
-        _atomic_publish_bundle(
+        _atomic_publish_shared_generation(
+            config,
+            staged_bronze,
             temp_db,
-            config.db_path,
-            config.manifest_path,
             manifest,
             verify_source=verify_source,
         )
@@ -1498,6 +1726,7 @@ def _refresh_all_and_rebuild_locked(
     finally:
         if temp_db.exists():
             temp_db.unlink()
+        shutil.rmtree(staged_warehouse, ignore_errors=True)
 
 
 def refresh_all_and_rebuild(
