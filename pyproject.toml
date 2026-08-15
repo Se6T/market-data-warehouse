@@ -2,6 +2,21 @@
 name = "market-data-warehouse"
 version = "0.2.0"
 requires-python = ">=3.12"
+dependencies = [
+    "duckdb==1.5.3",
+    "httpx==0.28.1",
+    "ib-insync==0.9.86",
+    "pyarrow==24.0.0",
+    "requests==2.34.2",
+    "rich==15.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.0.3",
+    "pytest-cov==7.1.0",
+    "responses==0.26.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
