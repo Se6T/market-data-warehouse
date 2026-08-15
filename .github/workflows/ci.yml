@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Sync locked dependencies
+        run: uv sync --frozen --group dev
+      - name: Full tests and 100% coverage
+        run: >-
+          env -u PYTHONPATH uv run python -m pytest tests -q
+          --cov=clients --cov=scripts --cov-report=term-missing
+      - name: RuntimeWarning gate
+        run: env -u PYTHONPATH uv run python -m pytest tests -q -W error::RuntimeWarning
+      - name: Compile
+        run: env -u PYTHONPATH uv run python -m compileall -q clients scripts tests
+      - name: Secret scan
+        run: bash scripts/pre-commit-secrets-scan.sh
+      - name: Diff integrity
+        run: git diff --check

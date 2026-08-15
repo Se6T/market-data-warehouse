@@ -325,6 +325,37 @@ Common flags:
 python scripts/rebuild_duckdb_from_parquet.py
 ```
 
+For the Phase 3 all-universe gate, use the atomic refresh/rebuild command instead:
+
+```bash
+python scripts/refresh_all_and_rebuild.py \
+  --as-of 2026-08-11 \
+  --db-path ~/market-warehouse/duckdb/market.duckdb \
+  --manifest ~/market-warehouse/duckdb/current/manifest.json
+```
+
+The stable database authority is normalized to the immutable-generation-backed
+`duckdb/current/market.duckdb` bundle. The pre-refresh inventory is written to
+`duckdb/pre-refresh-inventory.json` unless `--inventory-path` is explicitly supplied.
+
+This command inventories every active equity, futures, volatility, and crypto
+Parquet identity; records physical schemas and SHA-256 hashes; refreshes each
+identity through its owning ingestion script; builds and validates a temporary
+multi-asset DuckDB; and only then writes an immutable versioned database/manifest
+generation and atomically promotes the `duckdb/current` symlink as the sole
+commit point.
+The inventory path is create-only, so choose a new immutable path for every run.
+Any refresh, schema, count, identity, hash, or publication failure leaves the
+complete predecessor generation consumable. Stable readers must call
+`resolve_current_bundle()` once and use both resolved paths it returns; opening
+`current/market.duckdb` and `current/manifest.json` independently is not a
+coherent-reader contract. Candidate files and directories are fsynced before the
+pointer rename and its parent is fsynced afterward, so SIGKILL before promotion
+can leave only an unreachable generation, never a visible mismatched pair.
+`--warehouse` and `--db-path` can target an isolated warehouse; the manifest must
+remain beside the database under `current`. Tests mock all owner commands and
+perform no external I/O.
+
 ---
 
 ## Scheduling

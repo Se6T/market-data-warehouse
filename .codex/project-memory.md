@@ -32,7 +32,8 @@ Use this file for:
   - Nasdaq historical quote API with `assetclass=etf`
   - Stooq U.S. daily CSV
 - `IBClient.connect()` already retries successive `clientId` values after IB error `326`.
-- `DBClient.replace_equities_from_parquet()` recreates the analytical tables from scratch on each rebuild so repeat DuckDB rebuilds are safe against an existing DB file.
+- `DBClient.replace_equities_from_parquet()` remains the destructive one-class compatibility rebuild; `DBClient.load_equities_from_parquet(..., reset=False)` appends additional symbol-based asset classes for a temporary all-universe build without erasing predecessors.
+- `scripts/refresh_all_and_rebuild.py` is the atomic Phase 3 all-universe publication gate. It records a create-only pre-refresh inventory, enforces per-asset-calendar freshness, validates exact physical DuckDB schema and per-identity contents, and publishes immutable versioned DB/manifest generations through one atomic `current` symlink. Stable readers pin both files with `resolve_current_bundle()`.
 - Preferred IBC startup on macOS is the machine-local secure service installed by `scripts/install_ibc_secure_service.py`, which writes wrappers under `~/ibc/bin`, a LaunchAgent under `~/Library/LaunchAgents/local.ibc-gateway.plist`, and renders a temporary runtime config from `~/ibc/config.secure.ini` plus Keychain secrets instead of storing IB credentials in plaintext config.
 - For this repo, the secure IBC service is a required machine-local dependency for IB-backed workflows, but the service itself is global to the user's Mac rather than scoped to this repo.
 - `symbol_id` for new symbols is a stable 53-bit `blake2b(symbol)`-derived value.

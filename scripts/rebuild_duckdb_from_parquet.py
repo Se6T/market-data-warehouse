@@ -81,5 +81,6 @@ def main() -> None:
             )
 
 
-if __name__ == "__main__":
-    main()
+from scripts._entrypoint import run_main
+
+run_main(__name__, main)

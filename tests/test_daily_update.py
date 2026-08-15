@@ -624,6 +624,11 @@ def _mock_ib_instance(ticker_bars):
     return mock
 
 
+def _patch_ib_factory(mock_ib):
+    """Patch the construction seam used by the daily-update runtime."""
+    return patch("scripts.daily_update.create_ib_client_or_adapter", return_value=mock_ib)
+
+
 def _mock_fallback_instance(date_to_bar=None):
     """Create a mock fallback client context manager."""
     date_to_bar = date_to_bar or {}
@@ -799,7 +804,7 @@ class TestMain:
 
         with (
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -843,7 +848,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -889,7 +894,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -932,7 +937,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -943,7 +948,7 @@ class TestMain:
             mock_date.today.return_value = today
             mock_date.fromisoformat = date.fromisoformat
             mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
-            main()
+            assert main() == 1
 
         with BronzeClient(bronze_dir=bronze_dir) as bronze:
             rows = bronze.read_symbol_rows("AAPL")
@@ -987,7 +992,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -1025,27 +1030,36 @@ class TestMain:
         )
 
         today = date(2025, 1, 3)
-        # Bad bar: high < low
-        bad_bar = _make_bar(date="2025-01-03", high=1.0, low=200.0)
-        mock_ib = _mock_ib_instance({"AAPL": [bad_bar]})
+        # More than the summary display cap: every bad bar has high < low.
+        bad_bars = [
+            _make_bar(date="2025-01-03", high=1.0, low=200.0)
+            for _ in range(21)
+        ]
+        mock_ib = _mock_ib_instance({"AAPL": bad_bars})
         mock_fallback = _mock_fallback_instance()
 
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=bronze_dir),
             ),
             patch("scripts.daily_update.BRONZE_DIR", bronze_dir),
+            patch("scripts.daily_update.console.print") as print_mock,
         ):
             mock_date.today.return_value = today
             mock_date.fromisoformat = date.fromisoformat
             mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
             main()
 
+        printed = "\n".join(
+            str(item.args[0]) for item in print_mock.call_args_list if item.args
+        )
+        assert "Validation issues:  21" in printed
+        assert "... and 1 more" in printed
         with BronzeClient(bronze_dir=bronze_dir) as bronze:
             rows = bronze.read_symbol_rows("AAPL")
         assert len(rows) == 1
@@ -1088,7 +1102,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -1142,7 +1156,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -1200,7 +1214,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -1346,7 +1360,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -1390,7 +1404,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -1433,7 +1447,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -1504,7 +1518,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -1560,7 +1574,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
@@ -1604,7 +1618,7 @@ class TestMain:
         with (
             patch("scripts.daily_update.is_trading_day", return_value=True),
             patch("scripts.daily_update.date") as mock_date,
-            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
             patch(
                 "scripts.daily_update.BronzeClient",
