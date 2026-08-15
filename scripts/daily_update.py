@@ -738,7 +738,7 @@ def main():
         console.print("\n[bold]Validation issues:[/bold]")
         for issue in total_issues[:20]:
             console.print(f"  [yellow]{issue}[/yellow]")
-        if len(total_issues) > 20:  # pragma: no cover
+        if len(total_issues) > 20:
             console.print(f"  ... and {len(total_issues) - 20} more")
     console.print()
     return 1 if tickers_failed else 0
