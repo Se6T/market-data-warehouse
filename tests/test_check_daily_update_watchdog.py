@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -38,6 +40,20 @@ def _config(tmp_path: Path, *, node_bin: str = "/opt/homebrew/bin/node") -> Runn
 
 
 class TestHelpers:
+    def test_direct_script_bootstrap_restores_repo_import_path(self):
+        module_path = Path(__file__).parents[1] / "scripts" / "check_daily_update_watchdog.py"
+        repo_root = str(module_path.parent.parent)
+        original_path = sys.path[:]
+        sys.path[:] = [entry for entry in sys.path if entry != repo_root]
+        try:
+            spec = importlib.util.spec_from_file_location("watchdog_bootstrap_test", module_path)
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            assert sys.path[0] == repo_root
+        finally:
+            sys.path[:] = original_path
+
     def test_parse_args_and_path_builders(self, tmp_path):
         args = parse_args(["--run-date", "2026-03-11"])
         assert args.run_date == "2026-03-11"

@@ -1030,9 +1030,12 @@ class TestMain:
         )
 
         today = date(2025, 1, 3)
-        # Bad bar: high < low
-        bad_bar = _make_bar(date="2025-01-03", high=1.0, low=200.0)
-        mock_ib = _mock_ib_instance({"AAPL": [bad_bar]})
+        # More than the summary display cap: every bad bar has high < low.
+        bad_bars = [
+            _make_bar(date="2025-01-03", high=1.0, low=200.0)
+            for _ in range(21)
+        ]
+        mock_ib = _mock_ib_instance({"AAPL": bad_bars})
         mock_fallback = _mock_fallback_instance()
 
         with (
@@ -1045,12 +1048,18 @@ class TestMain:
                 lambda **kw: BronzeClient(bronze_dir=bronze_dir),
             ),
             patch("scripts.daily_update.BRONZE_DIR", bronze_dir),
+            patch("scripts.daily_update.console.print") as print_mock,
         ):
             mock_date.today.return_value = today
             mock_date.fromisoformat = date.fromisoformat
             mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
             main()
 
+        printed = "\n".join(
+            str(item.args[0]) for item in print_mock.call_args_list if item.args
+        )
+        assert "Validation issues:  21" in printed
+        assert "... and 1 more" in printed
         with BronzeClient(bronze_dir=bronze_dir) as bronze:
             rows = bronze.read_symbol_rows("AAPL")
         assert len(rows) == 1
