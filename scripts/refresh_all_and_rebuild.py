@@ -15,6 +15,7 @@ import sys
 import tarfile
 import tempfile
 import uuid
+import zipfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta, timezone
@@ -126,6 +127,7 @@ class RefreshConfig:
     python: Path
     repo_root: Path = PROJECT_ROOT
     command_timeout: int = 3600
+    source_archive_fd: int | None = None
 
 
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
@@ -386,20 +388,72 @@ def _archive_members(archive: bytes) -> dict[str, bytes]:
     return members
 
 
+def _git_tree_members(
+    repo_root: Path, expected: Mapping[str, str],
+) -> dict[str, tuple[int, bytes]]:
+    """Read ordinary committed blobs directly, independent of archive attributes."""
+    _validate_recorded_source(repo_root, expected)
+    commit = expected["commit"]
+    listing = bytes(
+        _run_git(repo_root, "ls-tree", "-rz", "--full-tree", commit, text=False).stdout
+    )
+    members: dict[str, tuple[int, bytes]] = {}
+    for record in listing.split(b"\0"):
+        if not record:
+            continue
+        metadata, separator, raw_path = record.partition(b"\t")
+        fields = metadata.split()
+        if not separator or len(fields) != 3:
+            raise RefreshFailure("recorded Git tree inventory is malformed")
+        mode_text, object_type, object_id = fields
+        if object_type != b"blob" or mode_text not in {b"100644", b"100755"}:
+            raise RefreshFailure("recorded Git tree contains unsupported entries")
+        path = os.fsdecode(raw_path)
+        if path in members:
+            raise RefreshFailure("recorded Git tree contains duplicate paths")
+        payload = bytes(
+            _run_git(repo_root, "cat-file", "blob", object_id.decode("ascii"), text=False).stdout
+        )
+        members[path] = (int(mode_text, 8), payload)
+    return members
+
+
+def _archive_tree_members(archive: bytes) -> dict[str, tuple[int, bytes]]:
+    members: dict[str, tuple[int, bytes]] = {}
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
+        for member in source.getmembers():
+            if member.isdir():
+                continue
+            if not member.isfile() or member.name in members:
+                raise RefreshFailure(f"committed source contains unsupported link: {member.name}")
+            extracted = source.extractfile(member)
+            if extracted is None:
+                raise RefreshFailure("committed source archive is incomplete")
+            mode = 0o100755 if member.mode & 0o111 else 0o100644
+            members[member.name] = (mode, extracted.read())
+    return members
+
+
 def _source_archive(repo_root: Path, expected: Mapping[str, str]) -> bytes:
     _validate_recorded_source(repo_root, expected)
     commit = expected["commit"]
-    return bytes(
+    archive = bytes(
         _run_git(repo_root, "archive", "--format=tar", commit, text=False).stdout
     )
+    if _archive_tree_members(archive) != _git_tree_members(repo_root, expected):
+        raise RefreshFailure("Git archive differs from recorded Git tree")
+    return archive
 
 
 def _verify_materialized_source_tree(
     repo_root: Path, expected: Mapping[str, str], destination: Path,
 ) -> None:
-    expected_members = _archive_members(_source_archive(repo_root, expected))
+    expected_members = _git_tree_members(repo_root, expected)
     actual_members = {
-        path.relative_to(destination).as_posix(): path.read_bytes()
+        path.relative_to(destination).as_posix(): (
+            0o100755 if path.stat().st_mode & 0o111 else 0o100644,
+            path.read_bytes(),
+        )
         for path in destination.rglob("*")
         if path.is_file()
     }
@@ -422,9 +476,26 @@ def _materialize_source_tree(
                 raise RefreshFailure("committed source archive escapes materialization root")
         source.extractall(destination, filter="data")
     _verify_materialized_source_tree(repo_root, expected, destination)
+    committed = _git_tree_members(repo_root, expected)
     for path in sorted(destination.rglob("*"), reverse=True):
-        path.chmod(0o500 if path.is_dir() else 0o400)
+        relative = path.relative_to(destination).as_posix()
+        executable = not path.is_dir() and committed[relative][0] == 0o100755
+        path.chmod(0o500 if path.is_dir() or executable else 0o400)
     destination.chmod(0o500)
+
+
+@contextmanager
+def _sealed_execution_source(repo_root: Path, expected: Mapping[str, str]):
+    """Yield an unlinked ZIP fd containing only blob-verified committed bytes."""
+    members = _git_tree_members(repo_root, expected)
+    with tempfile.TemporaryFile(mode="w+b") as sealed:
+        with zipfile.ZipFile(sealed, mode="w", compression=zipfile.ZIP_STORED) as archive:
+            for path, (_mode, payload) in sorted(members.items()):
+                archive.writestr(path, payload)
+        sealed.flush()
+        os.fsync(sealed.fileno())
+        sealed.seek(0)
+        yield sealed
 
 
 def _verify_source_identity(
@@ -449,7 +520,7 @@ def _update_argv(config: RefreshConfig, entry: InventoryEntry, preset: Path) -> 
                 "tickers": [entry.symbol],
             }
         preset.write_bytes(_canonical_bytes(preset_document))
-        return [
+        owner_argv = [
             python,
             str(config.repo_root / "scripts" / "daily_update.py"),
             "--asset-class", entry.asset_class,
@@ -457,26 +528,47 @@ def _update_argv(config: RefreshConfig, entry: InventoryEntry, preset: Path) -> 
             "--force",
             "--preset", str(preset),
         ]
-    if entry.asset_class == "volatility":
-        return [
+    elif entry.asset_class == "volatility":
+        owner_argv = [
             python,
             str(config.repo_root / "scripts" / "fetch_cboe_volatility.py"),
             "--symbols", entry.symbol,
             "--end", config.as_of.isoformat(),
             "--warehouse", str(config.warehouse),
         ]
-    return [
-        python,
-        str(config.repo_root / "scripts" / "fetch_binance_crypto.py"),
-        "--symbols", entry.symbol,
-        "--end", config.as_of.isoformat(),
-        "--warehouse", str(config.warehouse),
-    ]
+    else:
+        owner_argv = [
+            python,
+            str(config.repo_root / "scripts" / "fetch_binance_crypto.py"),
+            "--symbols", entry.symbol,
+            "--end", config.as_of.isoformat(),
+            "--warehouse", str(config.warehouse),
+        ]
+    if config.source_archive_fd is None:
+        return owner_argv
+    script = Path(owner_argv[1]).relative_to(config.repo_root).as_posix()
+    archive = f"/dev/fd/{config.source_archive_fd}"
+    bootstrap = (
+        "import os,sys,sysconfig,zipfile;"
+        "a,s=sys.argv[1:3];sys.argv=sys.argv[2:];"
+        "v=f'python{sys.version_info.major}.{sys.version_info.minor}';"
+        "p=os.path.dirname(os.path.dirname(sys.executable));"
+        "x=sysconfig.get_paths();"
+        "sys.path[:0]=[a,p+'/lib/'+v+'/site-packages',x['purelib'],x['platlib']];"
+        "g={'__name__':'__main__','__file__':s,'__package__':None,'__cached__':None};"
+        "exec(compile(zipfile.ZipFile(a).read(s),s,'exec'),g)"
+    )
+    return [python, "-I", "-S", "-c", bootstrap, archive, script, *owner_argv[2:]]
 
 
 def _default_runner(config: RefreshConfig) -> CommandRunner:
     def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        env = os.environ.copy()
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(("PYTHON", "LD_", "DYLD_")) and key != "VIRTUAL_ENV"
+        }
+        env["PATH"] = os.defpath
         env["MDW_WAREHOUSE"] = str(config.warehouse)
         return subprocess.run(
             argv,
@@ -486,6 +578,9 @@ def _default_runner(config: RefreshConfig) -> CommandRunner:
             text=True,
             timeout=config.command_timeout,
             env=env,
+            pass_fds=(
+                () if config.source_archive_fd is None else (config.source_archive_fd,)
+            ),
         )
 
     return run
@@ -946,27 +1041,60 @@ def _atomic_publish_bundle(
 @contextmanager
 def _warehouse_refresh_lock(warehouse: Path):
     _reject_symlink_components(warehouse, "warehouse refresh lock root")
-    if warehouse.is_symlink() or not warehouse.is_dir():
-        raise RefreshFailure("warehouse refresh lock root must be a real directory")
-    lock_path = warehouse / ".mdw-m0-refresh.lock"
-    flags = os.O_RDWR | os.O_CREAT
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
     if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
+        directory_flags |= os.O_CLOEXEC
     if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+        directory_flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(lock_path, flags, 0o600)
+        warehouse_fd = os.open(warehouse, directory_flags)
     except OSError as exc:
-        raise RefreshFailure("warehouse refresh lock is unsafe or unavailable") from exc
+        raise RefreshFailure("warehouse refresh lock root must be a real directory") from exc
+    descriptor: int | None = None
     try:
+        warehouse_stat = os.fstat(warehouse_fd)
+        try:
+            named_warehouse = os.lstat(warehouse)
+        except OSError as exc:
+            raise RefreshFailure("warehouse refresh lock path changed during acquisition") from exc
+        if (
+            not stat.S_ISDIR(warehouse_stat.st_mode)
+            or warehouse_stat.st_uid != os.geteuid()
+            or warehouse_stat.st_mode & 0o022
+            or (warehouse_stat.st_dev, warehouse_stat.st_ino)
+            != (named_warehouse.st_dev, named_warehouse.st_ino)
+        ):
+            raise RefreshFailure("warehouse refresh lock root has unsafe ownership or mode")
+        try:
+            fcntl.flock(warehouse_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RefreshFailure("warehouse refresh is already in progress") from exc
+
+        lock_name = ".mdw-m0-refresh.lock"
+        flags = os.O_RDWR | os.O_CREAT
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(lock_name, flags, 0o600, dir_fd=warehouse_fd)
+        except OSError as exc:
+            raise RefreshFailure("warehouse refresh lock is unsafe or unavailable") from exc
         opened = os.fstat(descriptor)
         try:
-            named = os.lstat(lock_path)
+            named = os.stat(lock_name, dir_fd=warehouse_fd, follow_symlinks=False)
         except OSError as exc:
             raise RefreshFailure("warehouse refresh lock path changed during acquisition") from exc
         if (
             not stat.S_ISREG(opened.st_mode)
-            or opened.st_nlink != 1
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) != 0o600
+        ):
+            raise RefreshFailure("warehouse refresh lock has unsafe ownership or mode")
+        if (
+            opened.st_nlink != 1
             or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
         ):
             raise RefreshFailure("warehouse refresh lock must be an unaliased regular file")
@@ -974,9 +1102,19 @@ def _warehouse_refresh_lock(warehouse: Path):
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RefreshFailure("warehouse refresh is already in progress") from exc
+        named_after = os.stat(lock_name, dir_fd=warehouse_fd, follow_symlinks=False)
+        opened_after = os.fstat(descriptor)
+        if (
+            (opened_after.st_dev, opened_after.st_ino)
+            != (named_after.st_dev, named_after.st_ino)
+            or opened_after.st_nlink != 1
+        ):
+            raise RefreshFailure("warehouse refresh lock path changed during acquisition")
         yield
     finally:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(warehouse_fd)
 
 
 def _run_result_path(config: RefreshConfig, run_id: str) -> Path:
@@ -989,11 +1127,72 @@ def _run_result_path(config: RefreshConfig, run_id: str) -> Path:
 
 def _write_run_result(path: Path, document: Mapping[str, object]) -> None:
     _reject_symlink_components(path.parent, "run-result directory")
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     _reject_symlink_components(path.parent, "run-result directory")
-    if path.parent.is_symlink() or not path.parent.is_dir():
-        raise RefreshFailure("run-result directory must be a real directory")
-    _write_immutable(path, document)
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        directory_fd = os.open(path.parent, flags)
+    except OSError as exc:
+        raise RefreshFailure("run-result directory must be a real directory") from exc
+    descriptor: int | None = None
+    created = False
+    try:
+        directory_stat = os.fstat(directory_fd)
+        if (
+            not stat.S_ISDIR(directory_stat.st_mode)
+            or directory_stat.st_uid != os.geteuid()
+            or directory_stat.st_mode & 0o022
+        ):
+            raise RefreshFailure("run-result directory has unsafe ownership or mode")
+        create_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_CLOEXEC"):
+            create_flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            create_flags |= os.O_NOFOLLOW
+        payload = _canonical_bytes(document)
+        descriptor = os.open(path.name, create_flags, 0o600, dir_fd=directory_fd)
+        created = True
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        opened = os.fstat(descriptor)
+        named_file = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+        try:
+            named_directory = os.lstat(path.parent)
+        except OSError as exc:
+            raise RefreshFailure("run-result directory changed during write") from exc
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or opened.st_nlink != 1
+            or (opened.st_dev, opened.st_ino) != (named_file.st_dev, named_file.st_ino)
+        ):
+            raise RefreshFailure("run-result file changed during write")
+        if (directory_stat.st_dev, directory_stat.st_ino) != (
+            named_directory.st_dev, named_directory.st_ino,
+        ):
+            raise RefreshFailure("run-result directory changed during write")
+        os.fsync(directory_fd)
+    except BaseException:
+        if created:
+            try:
+                os.unlink(path.name, dir_fd=directory_fd)
+                os.fsync(directory_fd)
+            except BaseException:
+                pass
+        raise
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(directory_fd)
 
 
 def _terminal_steps(
@@ -1052,26 +1251,31 @@ def _refresh_all_and_rebuild_locked(
             scratch = Path(scratch_name)
             source_root = scratch / "mdw-source-tree"
             _materialize_source_tree(config.repo_root, identity, source_root)
-            execution_config = replace(config, repo_root=source_root)
-            runner = command_runner or _default_runner(execution_config)
-            verify_source = lambda: _verify_source_identity(
-                config.repo_root, identity, source_identity
-            )
-            def verify_execution_source() -> None:
-                verify_source()
-                _verify_materialized_source_tree(config.repo_root, identity, source_root)
-            presets = scratch / "presets"
-            presets.mkdir()
-            try:
-                _refresh_inventory(
-                    execution_config, before, runner, presets, verify_execution_source, steps
+            with _sealed_execution_source(config.repo_root, identity) as sealed_source:
+                execution_config = replace(
+                    config,
+                    repo_root=source_root,
+                    source_archive_fd=sealed_source.fileno(),
                 )
-                verify_execution_source()
-            finally:
-                for path in source_root.rglob("*"):
-                    if path.is_dir():
-                        path.chmod(0o700)
-                source_root.chmod(0o700)
+                runner = command_runner or _default_runner(execution_config)
+                verify_source = lambda: _verify_source_identity(
+                    config.repo_root, identity, source_identity
+                )
+                def verify_execution_source() -> None:
+                    verify_source()
+                    _verify_materialized_source_tree(config.repo_root, identity, source_root)
+                presets = scratch / "presets"
+                presets.mkdir()
+                try:
+                    _refresh_inventory(
+                        execution_config, before, runner, presets, verify_execution_source, steps
+                    )
+                    verify_execution_source()
+                finally:
+                    for path in source_root.rglob("*"):
+                        if path.is_dir():
+                            path.chmod(0o700)
+                    source_root.chmod(0o700)
         phase_hook("refresh")
 
         after = discover_inventory(bronze_root, require_all_asset_classes=False)
