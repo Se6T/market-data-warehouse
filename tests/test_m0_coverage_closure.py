@@ -17,6 +17,21 @@ import pytest
 from scripts import refresh_all_and_rebuild as m0
 
 
+def test_shared_script_entrypoint_runs_only_for_main_and_preserves_exit_code() -> None:
+    from scripts._entrypoint import run_main
+
+    main = MagicMock(return_value=7)
+    run_main("scripts.owner", main)
+    main.assert_not_called()
+
+    run_main("__main__", main)
+    main.assert_called_once_with()
+
+    with pytest.raises(SystemExit) as raised:
+        run_main("__main__", main, exit_with_result=True)
+    assert raised.value.code == 7
+
+
 def _config(tmp_path: Path) -> m0.RefreshConfig:
     warehouse = tmp_path / "warehouse"
     warehouse.mkdir(mode=0o700)

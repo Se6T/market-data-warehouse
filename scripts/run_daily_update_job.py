@@ -374,5 +374,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     return final_code
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+from scripts._entrypoint import run_main
+
+run_main(__name__, main, exit_with_result=True)
