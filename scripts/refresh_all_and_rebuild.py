@@ -897,6 +897,11 @@ def _atomic_publish_bundle(
         verify_source()
         _fsync_directory(pointer.parent)
         verify_source()
+        # Marker removal is part of publication success: while the marker
+        # exists readers intentionally pin the predecessor.  If unlink fails,
+        # the exception path restores the predecessor and reports failure
+        # instead of claiming publication while readers still see old data.
+        recovery.unlink()
         committed = True
     except BaseException:
         if promoted:
@@ -930,13 +935,8 @@ def _atomic_publish_bundle(
         raise
     finally:
         if committed:
-            # Cleanup happens strictly after the commit point.  Try both steps
-            # independently so compound cleanup faults cannot turn a committed
-            # publication into a reported failure or contradictory rollback.
-            try:
-                recovery.unlink()
-            except BaseException:
-                pass
+            # The marker was removed before success was declared.  Durability
+            # cleanup is post-commit housekeeping and cannot negate success.
             try:
                 _fsync_directory(pointer.parent)
             except BaseException:

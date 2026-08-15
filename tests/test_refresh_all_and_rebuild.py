@@ -997,7 +997,7 @@ def test_failed_rollback_leaves_reader_recovery_bound_to_predecessor(tmp_path: P
 
 @pytest.mark.parametrize("has_predecessor", [False, True])
 @pytest.mark.parametrize(("unlink_fails", "cleanup_fsync_fails"), [(True, False), (False, True), (True, True)])
-def test_post_commit_marker_cleanup_faults_do_not_report_publication_failure(
+def test_post_commit_marker_cleanup_cannot_report_success_with_stale_reader_guard(
     tmp_path: Path, has_predecessor: bool, unlink_fails: bool, cleanup_fsync_fails: bool,
 ) -> None:
     current = tmp_path / "published" / "current"
@@ -1027,10 +1027,20 @@ def test_post_commit_marker_cleanup_faults_do_not_report_publication_failure(
                 raise OSError("cleanup fsync failed")
         real_fsync(path)
 
-    with patch.object(Path, "unlink", unlink), patch.object(m0, "_fsync_directory", side_effect=fsync):
-        m0._atomic_publish_bundle(candidate, db_path, manifest_path, {
-            "generation": "new", "database_sha256": hashlib.sha256(b"new-db").hexdigest(),
-        })
+    with patch.object(Path, "unlink", unlink), patch.object(
+        m0, "_fsync_directory", side_effect=fsync,
+    ):
+        if unlink_fails:
+            with pytest.raises(OSError, match="marker unlink failed"):
+                m0._atomic_publish_bundle(candidate, db_path, manifest_path, {
+                    "generation": "new",
+                    "database_sha256": hashlib.sha256(b"new-db").hexdigest(),
+                })
+        else:
+            m0._atomic_publish_bundle(candidate, db_path, manifest_path, {
+                "generation": "new",
+                "database_sha256": hashlib.sha256(b"new-db").hexdigest(),
+            })
     if unlink_fails:
         if has_predecessor:
             assert m0.resolve_current_bundle(db_path, manifest_path).database.read_bytes() == b"old-db"
