@@ -357,6 +357,64 @@ def test_recovery_cleanup_failure_does_not_prevent_reader_pinning(tmp_path: Path
     assert not recovery.exists()
 
 
+def test_resolver_rejects_invalid_committed_marker_states(tmp_path: Path) -> None:
+    db_path, manifest_path, bundle = _publish(tmp_path)
+    pointer = db_path.parent
+    recovery = pointer.parent / ".current.recovery.json"
+
+    for marker, message in [
+        ([], "marker is invalid"),
+        ({"state": "unknown"}, "marker state is invalid"),
+        ({"state": "committed", "successor": "../escape"}, "successor is invalid"),
+        ({"state": "committed", "successor": "other"}, "does not match successor"),
+    ]:
+        recovery.write_text(json.dumps(marker))
+        with pytest.raises(m0.RefreshFailure, match=message):
+            m0.resolve_current_bundle(db_path, manifest_path)
+        recovery.unlink()
+
+    marker = {"state": "committed", "successor": bundle.root.name}
+    recovery.write_text(json.dumps(marker))
+    pointer.unlink()
+    with pytest.raises(m0.RefreshFailure, match="pointer is invalid"):
+        m0.resolve_current_bundle(db_path, manifest_path)
+    pointer.symlink_to(bundle.root.relative_to(pointer.parent), target_is_directory=True)
+    with patch.object(m0.os, "readlink", side_effect=OSError("race")), pytest.raises(
+        m0.RefreshFailure, match="pointer is invalid",
+    ):
+        m0.resolve_current_bundle(db_path, manifest_path)
+
+
+def test_committed_marker_temp_cleanup_fault_preserves_transition_failure(tmp_path: Path) -> None:
+    db_path, manifest_path, _bundle = _publish(tmp_path, b"old")
+    candidate = tmp_path / "new"
+    candidate.write_bytes(b"new")
+    real_replace, real_unlink = os.replace, Path.unlink
+    replacements = 0
+
+    def fail_transition(source, destination):
+        nonlocal replacements
+        replacements += 1
+        if replacements == 2:
+            raise KeyboardInterrupt()
+        real_replace(source, destination)
+
+    def fail_marker_temp_cleanup(path: Path, *args, **kwargs):
+        if path.name.startswith("..current.recovery.json.") and path.name.endswith(".tmp"):
+            raise OSError("marker temp cleanup failed")
+        real_unlink(path, *args, **kwargs)
+
+    with patch.object(m0.os, "replace", side_effect=fail_transition), patch.object(
+        Path, "unlink", fail_marker_temp_cleanup,
+    ), pytest.raises(KeyboardInterrupt):
+        m0._atomic_publish_bundle(
+            candidate,
+            db_path,
+            manifest_path,
+            {"database_sha256": hashlib.sha256(b"new").hexdigest()},
+        )
+
+
 @pytest.mark.parametrize("attack", ["manifest_hash", "bundles_race", "regular_pointer", "recovery"])
 def test_publication_rejects_invalid_preconditions(tmp_path: Path, attack: str) -> None:
     current = tmp_path / "published" / "current"
