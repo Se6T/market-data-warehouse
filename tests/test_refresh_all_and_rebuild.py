@@ -104,6 +104,14 @@ def _run_result_paths(config: m0.RefreshConfig) -> list[Path]:
     )
 
 
+def _bronze_hashes(warehouse: Path) -> dict[str, str]:
+    bronze = warehouse / "data-lake" / "bronze"
+    return {
+        path.relative_to(bronze).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(bronze.glob("asset_class=*/symbol=*/data.parquet"))
+    }
+
+
 def test_discover_inventory_is_complete_canonical_and_content_bound(tmp_path: Path) -> None:
     warehouse = _warehouse(tmp_path)
     inventory = m0.discover_inventory(warehouse / "data-lake" / "bronze")
@@ -374,7 +382,10 @@ def test_update_failure_and_inventory_drift_preserve_db(tmp_path: Path) -> None:
         nonlocal calls
         calls += 1
         if calls == 1:
-            (warehouse / "data-lake/bronze/asset_class=crypto/symbol=BTC/data.parquet").unlink()
+            staged = Path(argv[argv.index("--warehouse") + 1])
+            staged.joinpath(
+                "data-lake/bronze/asset_class=crypto/symbol=BTC/data.parquet"
+            ).unlink()
         return subprocess.CompletedProcess(argv, 0, "", "")
     with pytest.raises(m0.RefreshFailure, match="inventory identities changed"):
         m0.refresh_all_and_rebuild(config, command_runner=remove, source_identity=_identity)
@@ -412,6 +423,93 @@ def test_owner_exception_records_failed_and_not_attempted_identities(tmp_path: P
     assert b"SECRET" not in result_bytes
     assert config.db_path.read_bytes() == old
     assert json.loads(config.manifest_path.read_text())["generation"] == "old"
+
+
+def test_first_owner_success_second_failure_preserves_every_canonical_bronze_byte(
+    tmp_path: Path,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    config = _config(tmp_path, warehouse)
+    old_db = _seed_old_db(config)
+    before = _bronze_hashes(warehouse)
+    staged_warehouses: list[Path] = []
+    calls = 0
+
+    def mutate_first_then_fail(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        if "--warehouse" in argv:
+            staged_warehouses.append(Path(argv[argv.index("--warehouse") + 1]))
+        if calls == 1:
+            owner_warehouse = staged_warehouses[-1]
+            with BronzeClient(
+                owner_warehouse / "data-lake/bronze/asset_class=crypto",
+                asset_class="crypto",
+            ) as client:
+                client.merge_ticker_rows("BTC", [_daily_row("2025-01-03", 91000)])
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        raise TimeoutError("second owner failed")
+
+    with pytest.raises(TimeoutError, match="second owner failed"):
+        m0.refresh_all_and_rebuild(
+            config, command_runner=mutate_first_then_fail, source_identity=_identity,
+        )
+
+    assert staged_warehouses and all(path != warehouse for path in staged_warehouses)
+    assert _bronze_hashes(warehouse) == before
+    assert config.db_path.read_bytes() == old_db
+
+
+def test_success_publishes_matching_bronze_database_and_all_identity_evidence(
+    tmp_path: Path,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    config = _config(tmp_path, warehouse)
+    _seed_old_db(config)
+    staged: Path | None = None
+
+    def refresh(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        nonlocal staged
+        if "--warehouse" in argv:
+            staged = Path(argv[argv.index("--warehouse") + 1])
+        assert staged is not None and staged != warehouse
+        if "fetch_binance_crypto.py" in " ".join(argv):
+            with BronzeClient(
+                staged / "data-lake/bronze/asset_class=crypto", asset_class="crypto",
+            ) as client:
+                client.merge_ticker_rows("BTC", [_daily_row("2025-01-03", 91000)])
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    object.__setattr__(config, "as_of", date(2025, 1, 3))
+    for asset_class, symbol in (("equity", "AAPL"), ("volatility", "VIX")):
+        root = warehouse / f"data-lake/bronze/asset_class={asset_class}"
+        with BronzeClient(root, asset_class=asset_class) as client:
+            client.merge_ticker_rows(symbol, [_daily_row("2025-01-03")])
+    with BronzeClient(
+        warehouse / "data-lake/bronze/asset_class=futures", asset_class="futures",
+    ) as client:
+        client.merge_ticker_rows("ES_202506", [_futures_row("2025-01-03")])
+    before = _bronze_hashes(warehouse)
+
+    manifest = m0.refresh_all_and_rebuild(
+        config, command_runner=refresh, source_identity=_identity,
+    )
+
+    after = _bronze_hashes(warehouse)
+    assert after != before
+    assert manifest["bronze_sha256"] == hashlib.sha256(
+        m0._canonical_bytes(after)
+    ).hexdigest()
+    evidence = {
+        (item["asset_class"], item["symbol"]): item["sha256"]
+        for item in manifest["post_refresh_inventory"]
+    }
+    assert evidence == {
+        (entry.asset_class, entry.symbol): entry.sha256
+        for entry in m0.discover_inventory(warehouse / "data-lake" / "bronze")
+    }
+    pinned = m0.resolve_current_bundle(config.db_path, config.manifest_path)
+    assert pinned.bronze == (warehouse / "data-lake" / "bronze").resolve()
 
 
 def test_zero_exit_noop_owner_cannot_publish_stale_identity(tmp_path: Path) -> None:
@@ -452,7 +550,8 @@ def test_terminal_latest_session_is_fail_closed(tmp_path: Path, new_day: str, me
     old = _seed_old_db(config)
     def mutate(argv: list[str]) -> subprocess.CompletedProcess[str]:
         if "fetch_binance_crypto.py" in " ".join(argv):
-            root = warehouse / "data-lake/bronze/asset_class=crypto"
+            staged = Path(argv[argv.index("--warehouse") + 1])
+            root = staged / "data-lake/bronze/asset_class=crypto"
             with BronzeClient(root, asset_class="crypto") as client:
                 if new_day < "2025-01-02":
                     client.replace_ticker_rows("BTC", [_daily_row(new_day)])
@@ -1368,18 +1467,20 @@ def test_source_mutation_in_publication_window_blocks_and_rolls_back(
             (repo / "scripts" / "publication_helper.py").write_text("# untracked drift\n")
 
     if injection == "publish_entry":
-        real_publish = m0._atomic_publish_bundle
+        real_publish = m0._atomic_publish_shared_generation
 
         def publish(*args, **kwargs) -> None:
             mutate()
             real_publish(*args, **kwargs)
 
-        publication_patch = patch.object(m0, "_atomic_publish_bundle", side_effect=publish)
+        publication_patch = patch.object(
+            m0, "_atomic_publish_shared_generation", side_effect=publish,
+        )
     elif injection == "pointer_replace":
         real_replace = os.replace
 
         def replace(source, destination) -> None:
-            if Path(destination) == config.db_path.parent:
+            if Path(destination) == config.warehouse / ".mdw-m0-current":
                 mutate()
             real_replace(source, destination)
 
@@ -1392,12 +1493,12 @@ def test_source_mutation_in_publication_window_blocks_and_rolls_back(
         def replace(source, destination) -> None:
             nonlocal promoted
             real_replace(source, destination)
-            if Path(destination) == config.db_path.parent:
+            if Path(destination) == config.warehouse / ".mdw-m0-current":
                 promoted = True
 
         def fsync_directory(path: Path) -> None:
             real_fsync_directory(path)
-            if promoted and Path(path) == config.db_path.parent.parent:
+            if promoted and Path(path) == config.warehouse:
                 mutate()
 
         publication_patch = contextlib.ExitStack()
