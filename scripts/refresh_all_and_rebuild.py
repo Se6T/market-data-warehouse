@@ -555,6 +555,8 @@ def _update_argv(config: RefreshConfig, entry: InventoryEntry, preset: Path) -> 
         "p=os.path.dirname(os.path.dirname(sys.executable));"
         "x=sysconfig.get_paths();"
         "sys.path[:0]=[a,p+'/lib/'+v+'/site-packages',x['purelib'],x['platlib']];"
+        "P=type('SealedImportPath',(list,),{'insert':lambda q,i,v:list.insert(q,1 if i==0 else i,v)});"
+        "sys.path=P(sys.path);"
         "g={'__name__':'__main__','__file__':s,'__package__':None,'__cached__':None};"
         "exec(compile(zipfile.ZipFile(a).read(s),s,'exec'),g)"
     )

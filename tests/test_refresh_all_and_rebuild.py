@@ -643,6 +643,51 @@ def test_owner_executes_sealed_committed_bytes_not_mutable_materialization(
     assert "-I" in argv and "-S" in argv
 
 
+def test_owner_imports_dependencies_from_sealed_commit_not_materialized_tree(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "clients").mkdir()
+    (repo / "clients" / "__init__.py").write_text("")
+    dependency = repo / "clients" / "payload.py"
+    dependency.write_text("VALUE = 'committed'\n")
+    owner = repo / "scripts" / "fetch_binance_crypto.py"
+    owner.write_text(
+        "import os,sys\nfrom pathlib import Path\n"
+        "PROJECT_ROOT=Path(__file__).resolve().parent.parent\n"
+        "sys.path.insert(0,str(PROJECT_ROOT))\n"
+        "from clients.payload import VALUE\n"
+        "Path(os.environ['MDW_WAREHOUSE'],'dependency-byte.txt').write_text(VALUE)\n"
+    )
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "sealed import closure"], cwd=repo, check=True)
+    identity = dict(m0._source_identity(repo))
+    warehouse = tmp_path / "warehouse"
+    warehouse.mkdir()
+
+    with m0._sealed_execution_source(repo, identity) as sealed:
+        dependency.write_text("VALUE = 'hostile'\n")
+        config = m0.RefreshConfig(
+            warehouse, tmp_path / "db", tmp_path / "manifest", tmp_path / "inventory",
+            date(2025, 1, 2), Path(sys.executable), repo,
+            source_archive_fd=sealed.fileno(),
+        )
+        entry = m0.InventoryEntry(
+            "crypto", "BTC", "unused", "0" * 64, 1, "2025-01-02", 1,
+            ("trade_date:date32[day]",), "1" * 64,
+        )
+        result = m0._default_runner(config)(
+            m0._update_argv(config, entry, tmp_path / "preset.json")
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert (warehouse / "dependency-byte.txt").read_text() == "committed"
+
+
 def test_materialization_rejects_git_archive_attributes_transformations(
     tmp_path: Path,
 ) -> None:
