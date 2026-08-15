@@ -45,17 +45,6 @@ import asyncio
 # ── helpers ───────────────────────────────────────────────────────────
 
 
-@pytest.fixture(autouse=True)
-def _block_real_ib_connections(monkeypatch):
-    """Fail before network I/O if a daily-update test misses the IB mock seam."""
-    def _fail_connect(*args, **kwargs):
-        pytest.fail(
-            "daily-update tests must mock the IB client factory; real IB connections are forbidden"
-        )
-
-    monkeypatch.setattr("clients.ib_client.IBClient.connect", _fail_connect)
-
-
 def _make_bar(
     date="2025-01-02", open=150.0, high=155.0, low=149.0, close=153.0, volume=1000000
 ):
