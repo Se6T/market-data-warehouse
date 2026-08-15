@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -93,6 +94,15 @@ def _identity(_root: Path) -> dict[str, str]:
     }
 
 
+def _run_result_paths(config: m0.RefreshConfig) -> list[Path]:
+    inventory_key = hashlib.sha256(
+        os.path.abspath(config.inventory_path).encode("utf-8")
+    ).hexdigest()
+    return sorted(
+        config.warehouse.joinpath(".mdw-m0-run-results", inventory_key).glob("*.json")
+    )
+
+
 def test_discover_inventory_is_complete_canonical_and_content_bound(tmp_path: Path) -> None:
     warehouse = _warehouse(tmp_path)
     inventory = m0.discover_inventory(warehouse / "data-lake" / "bronze")
@@ -164,6 +174,68 @@ def test_success_refreshes_each_identity_and_publishes_manifest(tmp_path: Path) 
     assert json.loads(pinned.manifest.read_text()) == manifest
     assert pinned.manifest.read_bytes().endswith(b"\n")
     assert len(json.loads(config.inventory_path.read_text())["inventory"]) == 4
+    [result_path] = _run_result_paths(config)
+    run_result = json.loads(result_path.read_text())
+    assert run_result["outcome"] == "succeeded"
+    assert [step["status"] for step in run_result["steps"]] == ["succeeded"] * 4
+    assert result_path.stat().st_nlink == 1
+
+
+def test_whole_refresh_lock_rejects_concurrent_run_before_any_effect(tmp_path: Path) -> None:
+    warehouse = _warehouse(tmp_path)
+    config = _config(tmp_path, warehouse)
+    old = _seed_old_db(config)
+    lock_path = warehouse / ".mdw-m0-refresh.lock"
+    lock_path.touch(mode=0o600)
+    with lock_path.open("r+b") as holder:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        calls: list[list[str]] = []
+        with pytest.raises(m0.RefreshFailure, match="already in progress"):
+            m0.refresh_all_and_rebuild(
+                config, command_runner=_runner(calls), source_identity=_identity,
+            )
+
+    assert calls == []
+    assert not config.inventory_path.exists()
+    assert _run_result_paths(config) == []
+    assert config.db_path.read_bytes() == old
+    assert json.loads(config.manifest_path.read_text())["generation"] == "old"
+
+
+def test_stale_unlocked_refresh_lock_is_reusable(tmp_path: Path) -> None:
+    config = _config(tmp_path, _warehouse(tmp_path))
+    lock_path = config.warehouse / ".mdw-m0-refresh.lock"
+    lock_path.write_text("stale pid metadata")
+
+    manifest = m0.refresh_all_and_rebuild(
+        config, command_runner=_runner([]), source_identity=_identity,
+    )
+
+    assert manifest["publication"]["published"] is True
+    with lock_path.open("r+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+@pytest.mark.parametrize("attack", ["symlink", "hardlink"])
+def test_refresh_lock_rejects_filesystem_aliases_before_inventory(
+    tmp_path: Path, attack: str,
+) -> None:
+    config = _config(tmp_path, _warehouse(tmp_path))
+    lock_path = config.warehouse / ".mdw-m0-refresh.lock"
+    outside = tmp_path / "outside-lock"
+    outside.write_text("outside")
+    if attack == "symlink":
+        lock_path.symlink_to(outside)
+    else:
+        os.link(outside, lock_path)
+
+    with pytest.raises(m0.RefreshFailure, match="refresh lock"):
+        m0.refresh_all_and_rebuild(
+            config, command_runner=_runner([]), source_identity=_identity,
+        )
+
+    assert not config.inventory_path.exists()
+    assert outside.read_text() == "outside"
 
 
 def test_futures_refresh_uses_the_owner_preset_contract(tmp_path: Path) -> None:
@@ -206,6 +278,18 @@ def test_update_failure_and_inventory_drift_preserve_db(tmp_path: Path) -> None:
         m0.refresh_all_and_rebuild(config, command_runner=fail, source_identity=_identity)
     assert config.db_path.read_bytes() == old
     assert json.loads(config.manifest_path.read_text())["generation"] == "old"
+    [result_path] = _run_result_paths(config)
+    result_bytes = result_path.read_bytes()
+    result = json.loads(result_bytes)
+    assert result["outcome"] == "failed"
+    assert result["failure_type"] == "RefreshFailure"
+    assert [(step["asset_class"], step["symbol"], step["status"]) for step in result["steps"]] == [
+        ("crypto", "BTC", "succeeded"),
+        ("equity", "AAPL", "succeeded"),
+        ("futures", "ES_202506", "succeeded"),
+        ("volatility", "VIX", "failed"),
+    ]
+    assert b"SECRET" not in result_bytes
 
     config.inventory_path.unlink()
     calls = 0
@@ -218,6 +302,39 @@ def test_update_failure_and_inventory_drift_preserve_db(tmp_path: Path) -> None:
     with pytest.raises(m0.RefreshFailure, match="inventory identities changed"):
         m0.refresh_all_and_rebuild(config, command_runner=remove, source_identity=_identity)
     assert config.db_path.read_bytes() == old
+    assert result_path.read_bytes() == result_bytes
+    assert len(_run_result_paths(config)) == 2
+
+
+def test_owner_exception_records_failed_and_not_attempted_identities(tmp_path: Path) -> None:
+    config = _config(tmp_path, _warehouse(tmp_path))
+    old = _seed_old_db(config)
+    calls = 0
+
+    def fail_second(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise TimeoutError("SECRET child output")
+        return subprocess.CompletedProcess(argv, 0, "SECRET stdout", "SECRET stderr")
+
+    with pytest.raises(TimeoutError, match="SECRET child output"):
+        m0.refresh_all_and_rebuild(
+            config, command_runner=fail_second, source_identity=_identity,
+        )
+
+    [result_path] = _run_result_paths(config)
+    result_bytes = result_path.read_bytes()
+    result = json.loads(result_bytes)
+    assert [(step["asset_class"], step["symbol"], step["status"]) for step in result["steps"]] == [
+        ("crypto", "BTC", "succeeded"),
+        ("equity", "AAPL", "failed"),
+        ("futures", "ES_202506", "not_attempted"),
+        ("volatility", "VIX", "not_attempted"),
+    ]
+    assert b"SECRET" not in result_bytes
+    assert config.db_path.read_bytes() == old
+    assert json.loads(config.manifest_path.read_text())["generation"] == "old"
 
 
 def test_zero_exit_noop_owner_cannot_publish_stale_identity(tmp_path: Path) -> None:
@@ -386,12 +503,15 @@ def test_source_identity_and_default_runner_capture_output(tmp_path: Path) -> No
     completed = [
         subprocess.CompletedProcess(["git"], 0, "", ""),
         subprocess.CompletedProcess(["git"], 0, "commit-id\n", ""),
+        subprocess.CompletedProcess(["git"], 0, "commit\n", ""),
         subprocess.CompletedProcess(["git"], 0, "tree-id\n", ""),
         subprocess.CompletedProcess(["git"], 0, "tree-id\n", ""),
     ]
     with patch.object(m0.subprocess, "run", side_effect=completed) as run:
         assert m0._source_identity(tmp_path) == {"commit": "commit-id", "tree": "tree-id"}
     assert all(call.kwargs["capture_output"] and call.kwargs["check"] for call in run.call_args_list)
+    assert all(Path(call.args[0][0]).is_absolute() for call in run.call_args_list)
+    assert all(call.kwargs["env"]["PATH"] == os.defpath for call in run.call_args_list)
     config = m0.RefreshConfig(tmp_path, tmp_path / "db", tmp_path / "manifest", tmp_path / "inventory", date(2025, 1, 2), Path("python"), tmp_path, 17)
     result = subprocess.CompletedProcess(["safe"], 0, "SECRET", "SECRET")
     with patch.object(m0.subprocess, "run", return_value=result) as run:
@@ -443,6 +563,70 @@ def test_source_identity_allows_committed_tree(tmp_path: Path) -> None:
         ["git", "rev-parse", "HEAD^{tree}"], cwd=repo, check=True,
         capture_output=True, text=True,
     ).stdout.strip()
+
+
+def _real_repo(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "scripts" / "owner.py").write_text("VALUE = 1\n")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    return repo, dict(m0._source_identity(repo))
+
+
+def test_source_attestation_rejects_commit_tree_mismatch_and_noncommit(tmp_path: Path) -> None:
+    repo, identity = _real_repo(tmp_path)
+    (repo / "other.txt").write_text("other\n")
+    subprocess.run(["git", "add", "other.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "other"], cwd=repo, check=True)
+    other = dict(m0._source_identity(repo))
+
+    with pytest.raises(m0.RefreshFailure, match="commit tree mismatch"):
+        m0._materialize_source_tree(
+            repo, {"commit": identity["commit"], "tree": other["tree"]},
+            tmp_path / "bad-tree",
+        )
+    with pytest.raises(m0.RefreshFailure, match="not a commit"):
+        m0._materialize_source_tree(
+            repo, {"commit": other["tree"], "tree": other["tree"]},
+            tmp_path / "not-commit",
+        )
+
+
+def test_source_attestation_ignores_hostile_path_and_git_environment(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    repo, expected = _real_repo(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text("#!/bin/sh\nprintf '%s\\n' fake\n")
+    fake_git.chmod(0o755)
+    other, _other_identity = _real_repo(tmp_path / "other")
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(other / ".git" / "objects"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "hostile-config"))
+
+    assert m0._source_identity(repo) == expected
+    destination = tmp_path / "materialized"
+    m0._materialize_source_tree(repo, expected, destination)
+    assert (destination / "scripts" / "owner.py").read_text() == "VALUE = 1\n"
+
+
+def test_materialized_source_tampering_is_detected(tmp_path: Path) -> None:
+    repo, identity = _real_repo(tmp_path)
+    destination = tmp_path / "materialized"
+    m0._materialize_source_tree(repo, identity, destination)
+    owner = destination / "scripts" / "owner.py"
+    owner.chmod(0o600)
+    owner.write_text("VALUE = 'tampered'\n")
+
+    with pytest.raises(m0.RefreshFailure, match="materialized source differs"):
+        m0._verify_materialized_source_tree(repo, identity, destination)
 
 
 def _built_database(tmp_path: Path) -> tuple[Path, list[m0.InventoryEntry]]:

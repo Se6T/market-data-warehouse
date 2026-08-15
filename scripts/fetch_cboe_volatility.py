@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import uuid
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,29 @@ DEFAULT_WAREHOUSE = Path.home() / "market-warehouse"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_PRESET = SCRIPT_DIR.parent / "presets" / "volatility.json"
 ASSET_CLASS = "volatility"
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_write_table(table: pa.Table, parquet_path: Path) -> None:
+    temporary = parquet_path.with_name(f".{parquet_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        pq.write_table(table, temporary)
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, parquet_path)
+        _fsync_directory(parquet_path.parent)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _symbol_id(symbol: str) -> int:
@@ -136,7 +161,7 @@ def write_bronze_parquet(
     indices = pa.compute.sort_indices(table, sort_keys=[("trade_date", "ascending")])
     table = table.take(indices)
     
-    pq.write_table(table, parquet_path)
+    _atomic_write_table(table, parquet_path)
     console.print(f"  {symbol}: wrote {table.num_rows} rows to {parquet_path}")
     return parquet_path
 

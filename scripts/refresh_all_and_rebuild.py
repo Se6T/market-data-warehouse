@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -128,6 +131,41 @@ class RefreshConfig:
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 PhaseHook = Callable[[str], None]
 SourceIdentity = Callable[[Path], Mapping[str, str]]
+
+
+def _trusted_git() -> Path:
+    executable = shutil.which("git", path=os.defpath)
+    if executable is None:
+        raise RefreshFailure("trusted Git executable is unavailable")
+    trusted = Path(executable).resolve(strict=True)
+    if not trusted.is_absolute() or not trusted.is_file() or not os.access(trusted, os.X_OK):
+        raise RefreshFailure("trusted Git executable is invalid")
+    return trusted
+
+
+def _git_environment() -> dict[str, str]:
+    return {
+        "PATH": os.defpath,
+        "HOME": "/nonexistent",
+        "XDG_CONFIG_HOME": "/nonexistent",
+        "LC_ALL": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_COUNT": "0",
+    }
+
+
+def _run_git(
+    repo_root: Path, *args: str, text: bool = True,
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [str(_trusted_git()), "--no-replace-objects", *args],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=text,
+        env=_git_environment(),
+    )
 
 
 def _sha256_file(path: Path) -> str:
@@ -291,14 +329,24 @@ def discover_inventory(
     return sorted(entries, key=lambda item: (item.asset_class, item.symbol))
 
 
-def _source_identity(repo_root: Path) -> Mapping[str, str]:
-    def git(*args: str) -> str:
-        result = subprocess.run(
-            ["git", *args], cwd=repo_root, check=True, capture_output=True, text=True
-        )
-        return result.stdout.strip()
+def _git_text(repo_root: Path, *args: str) -> str:
+    return str(_run_git(repo_root, *args).stdout).strip()
 
-    status = git("status", "--porcelain=v1", "-z", "--untracked-files=all")
+
+def _validate_recorded_source(repo_root: Path, expected: Mapping[str, str]) -> None:
+    commit = expected.get("commit")
+    tree = expected.get("tree")
+    if not isinstance(commit, str) or not isinstance(tree, str):
+        raise RefreshFailure("source identity is incomplete")
+    if _git_text(repo_root, "cat-file", "-t", commit) != "commit":
+        raise RefreshFailure("recorded source object is not a commit")
+    committed_tree = _git_text(repo_root, "rev-parse", f"{commit}^{{tree}}")
+    if committed_tree != tree:
+        raise RefreshFailure("recorded source commit tree mismatch")
+
+
+def _source_identity(repo_root: Path) -> Mapping[str, str]:
+    status = _git_text(repo_root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
     relevant_untracked: list[str] = []
     tracked_drift: list[str] = []
     for line in status.split("\0"):
@@ -313,20 +361,57 @@ def _source_identity(repo_root: Path) -> Mapping[str, str]:
             tracked_drift.append(path_text)
     if tracked_drift or relevant_untracked:
         raise RefreshFailure("source tree is dirty; commit executed source before running M0")
-    commit = git("rev-parse", "HEAD")
-    tree = git("write-tree")
-    committed_tree = git("rev-parse", "HEAD^{tree}")
+    commit = _git_text(repo_root, "rev-parse", "--verify", "HEAD")
+    if _git_text(repo_root, "cat-file", "-t", commit) != "commit":
+        raise RefreshFailure("recorded source object is not a commit")
+    committed_tree = _git_text(repo_root, "rev-parse", f"{commit}^{{tree}}")
+    tree = _git_text(repo_root, "write-tree")
     if tree != committed_tree:
         raise RefreshFailure("source index does not match HEAD tree")
     return {"commit": commit, "tree": tree}
 
 
-def _materialize_source_tree(repo_root: Path, tree: str, destination: Path) -> None:
-    """Extract the recorded Git tree into a private, read-only execution root."""
-    archive = subprocess.run(
-        ["git", "archive", "--format=tar", tree], cwd=repo_root, check=True,
-        capture_output=True,
-    ).stdout
+def _archive_members(archive: bytes) -> dict[str, bytes]:
+    members: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
+        for member in source.getmembers():
+            if member.isdir():
+                continue
+            if not member.isfile():
+                raise RefreshFailure(f"committed source contains unsupported link: {member.name}")
+            extracted = source.extractfile(member)
+            if extracted is None:
+                raise RefreshFailure("committed source archive is incomplete")
+            members[member.name] = extracted.read()
+    return members
+
+
+def _source_archive(repo_root: Path, expected: Mapping[str, str]) -> bytes:
+    _validate_recorded_source(repo_root, expected)
+    commit = expected["commit"]
+    return bytes(
+        _run_git(repo_root, "archive", "--format=tar", commit, text=False).stdout
+    )
+
+
+def _verify_materialized_source_tree(
+    repo_root: Path, expected: Mapping[str, str], destination: Path,
+) -> None:
+    expected_members = _archive_members(_source_archive(repo_root, expected))
+    actual_members = {
+        path.relative_to(destination).as_posix(): path.read_bytes()
+        for path in destination.rglob("*")
+        if path.is_file()
+    }
+    if actual_members != expected_members:
+        raise RefreshFailure("materialized source differs from recorded Git tree")
+
+
+def _materialize_source_tree(
+    repo_root: Path, expected: Mapping[str, str], destination: Path,
+) -> None:
+    """Extract the recorded Git commit into a private, verified execution root."""
+    archive = _source_archive(repo_root, expected)
     destination.mkdir(mode=0o700)
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
         for member in source.getmembers():
@@ -336,6 +421,7 @@ def _materialize_source_tree(repo_root: Path, tree: str, destination: Path) -> N
             if destination.resolve() not in target.parents and target != destination.resolve():
                 raise RefreshFailure("committed source archive escapes materialization root")
         source.extractall(destination, filter="data")
+    _verify_materialized_source_tree(repo_root, expected, destination)
     for path in sorted(destination.rglob("*"), reverse=True):
         path.chmod(0o500 if path.is_dir() else 0o400)
     destination.chmod(0o500)
@@ -411,18 +497,29 @@ def _refresh_inventory(
     command_runner: CommandRunner,
     scratch: Path,
     verify_source: Callable[[], None] = lambda: None,
+    steps: list[dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
-    steps: list[dict[str, object]] = []
+    if steps is None:
+        steps = []
     for ordinal, entry in enumerate(inventory):
         verify_source()
         argv = _update_argv(config, entry, scratch / f"preset-{ordinal}.json")
         started = _utc_now()
-        result = command_runner(argv)
+        try:
+            result = command_runner(argv)
+        except BaseException:
+            steps.append({
+                "asset_class": entry.asset_class,
+                "symbol": entry.symbol,
+                "argv_sha256": hashlib.sha256(_canonical_bytes(argv)).hexdigest(),
+                "started_at": started,
+                "ended_at": _utc_now(),
+                "exit_code": None,
+                "status": "failed",
+            })
+            raise
         ended = _utc_now()
-        if result.args != argv:
-            raise RefreshFailure(
-                f"{entry.asset_class}:{entry.symbol} owner reported argv mismatch"
-            )
+        argv_matches = result.args == argv
         step = {
             "asset_class": entry.asset_class,
             "symbol": entry.symbol,
@@ -430,9 +527,14 @@ def _refresh_inventory(
             "started_at": started,
             "ended_at": ended,
             "exit_code": int(result.returncode),
-            "status": "succeeded" if result.returncode == 0 else "failed",
+            "status": "succeeded" if result.returncode == 0 and argv_matches else "failed",
         }
         steps.append(step)
+        verify_source()
+        if not argv_matches:
+            raise RefreshFailure(
+                f"{entry.asset_class}:{entry.symbol} owner reported argv mismatch"
+            )
         if result.returncode != 0:
             raise RefreshFailure(
                 f"{entry.asset_class}:{entry.symbol} update failed with exit {result.returncode}"
@@ -841,9 +943,85 @@ def _atomic_publish_bundle(
                 pass
 
 
-def refresh_all_and_rebuild(
+@contextmanager
+def _warehouse_refresh_lock(warehouse: Path):
+    _reject_symlink_components(warehouse, "warehouse refresh lock root")
+    if warehouse.is_symlink() or not warehouse.is_dir():
+        raise RefreshFailure("warehouse refresh lock root must be a real directory")
+    lock_path = warehouse / ".mdw-m0-refresh.lock"
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise RefreshFailure("warehouse refresh lock is unsafe or unavailable") from exc
+    try:
+        opened = os.fstat(descriptor)
+        try:
+            named = os.lstat(lock_path)
+        except OSError as exc:
+            raise RefreshFailure("warehouse refresh lock path changed during acquisition") from exc
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            raise RefreshFailure("warehouse refresh lock must be an unaliased regular file")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RefreshFailure("warehouse refresh is already in progress") from exc
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _run_result_path(config: RefreshConfig, run_id: str) -> Path:
+    inventory_key = hashlib.sha256(
+        os.path.abspath(config.inventory_path).encode("utf-8")
+    ).hexdigest()
+    directory = config.warehouse / ".mdw-m0-run-results" / inventory_key
+    return directory / f"{run_id}.json"
+
+
+def _write_run_result(path: Path, document: Mapping[str, object]) -> None:
+    _reject_symlink_components(path.parent, "run-result directory")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _reject_symlink_components(path.parent, "run-result directory")
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise RefreshFailure("run-result directory must be a real directory")
+    _write_immutable(path, document)
+
+
+def _terminal_steps(
+    inventory: Sequence[InventoryEntry], steps: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    by_identity = {
+        (str(step["asset_class"]), str(step["symbol"])): dict(step)
+        for step in steps
+    }
+    terminal: list[dict[str, object]] = []
+    for entry in inventory:
+        identity = (entry.asset_class, entry.symbol)
+        terminal.append(by_identity.get(identity, {
+            "asset_class": entry.asset_class,
+            "symbol": entry.symbol,
+            "argv_sha256": None,
+            "started_at": None,
+            "ended_at": None,
+            "exit_code": None,
+            "status": "not_attempted",
+        }))
+    return terminal
+
+
+def _refresh_all_and_rebuild_locked(
     config: RefreshConfig,
     *,
+    audit: dict[str, object],
     command_runner: CommandRunner | None = None,
     phase_hook: PhaseHook = lambda _phase: None,
     source_identity: SourceIdentity = _source_identity,
@@ -852,7 +1030,9 @@ def refresh_all_and_rebuild(
     _validate_config(config)
     bronze_root = config.warehouse / "data-lake" / "bronze"
     identity = source_identity(config.repo_root)
+    audit["identity"] = dict(identity)
     before = discover_inventory(bronze_root)
+    audit["inventory"] = before
     inventory_document = {
         "requested_as_of": config.as_of.isoformat(),
         "script_commit": identity["commit"],
@@ -865,23 +1045,28 @@ def refresh_all_and_rebuild(
     temp_db_parent = config.db_path.parent.parent
     temp_db_parent.mkdir(parents=True, exist_ok=True)
     temp_db = temp_db_parent / f".{config.db_path.name}.{uuid.uuid4().hex}.tmp"
+    steps: list[dict[str, object]] = []
+    audit["steps"] = steps
     try:
         with tempfile.TemporaryDirectory(prefix="mdw-m0-") as scratch_name:
             scratch = Path(scratch_name)
             source_root = scratch / "mdw-source-tree"
-            _materialize_source_tree(config.repo_root, identity["tree"], source_root)
+            _materialize_source_tree(config.repo_root, identity, source_root)
             execution_config = replace(config, repo_root=source_root)
             runner = command_runner or _default_runner(execution_config)
             verify_source = lambda: _verify_source_identity(
                 config.repo_root, identity, source_identity
             )
+            def verify_execution_source() -> None:
+                verify_source()
+                _verify_materialized_source_tree(config.repo_root, identity, source_root)
             presets = scratch / "presets"
             presets.mkdir()
             try:
-                steps = _refresh_inventory(
-                    execution_config, before, runner, presets, verify_source
+                _refresh_inventory(
+                    execution_config, before, runner, presets, verify_execution_source, steps
                 )
-                verify_source()
+                verify_execution_source()
             finally:
                 for path in source_root.rglob("*"):
                     if path.is_dir():
@@ -939,6 +1124,56 @@ def refresh_all_and_rebuild(
     finally:
         if temp_db.exists():
             temp_db.unlink()
+
+
+def refresh_all_and_rebuild(
+    config: RefreshConfig,
+    *,
+    command_runner: CommandRunner | None = None,
+    phase_hook: PhaseHook = lambda _phase: None,
+    source_identity: SourceIdentity = _source_identity,
+) -> dict[str, object]:
+    """Run one warehouse-scoped M0 transaction with immutable terminal evidence."""
+    with _warehouse_refresh_lock(config.warehouse):
+        run_id = uuid.uuid4().hex
+        result_path = _run_result_path(config, run_id)
+        started_at = _utc_now()
+        audit: dict[str, object] = {}
+        failure: BaseException | None = None
+        try:
+            return _refresh_all_and_rebuild_locked(
+                config,
+                audit=audit,
+                command_runner=command_runner,
+                phase_hook=phase_hook,
+                source_identity=source_identity,
+            )
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            raw_inventory = audit.get("inventory", [])
+            inventory = (
+                raw_inventory
+                if isinstance(raw_inventory, list)
+                and all(isinstance(item, InventoryEntry) for item in raw_inventory)
+                else []
+            )
+            raw_steps = audit.get("steps", [])
+            steps = raw_steps if isinstance(raw_steps, list) else []
+            identity = audit.get("identity")
+            document: dict[str, object] = {
+                "run_id": run_id,
+                "requested_as_of": config.as_of.isoformat(),
+                "started_at": started_at,
+                "ended_at": _utc_now(),
+                "outcome": "failed" if failure is not None else "succeeded",
+                "failure_type": type(failure).__name__ if failure is not None else None,
+                "source_identity": dict(identity) if isinstance(identity, Mapping) else None,
+                "inventory_path": str(config.inventory_path),
+                "steps": _terminal_steps(inventory, steps),
+            }
+            _write_run_result(result_path, document)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -256,6 +257,58 @@ class TestWriteBronzeParquet:
         path2 = write_bronze_parquet(same_table, "VXHYG", tmp_path)
         assert path2 == path
         assert path.stat().st_mtime == mtime_before
+
+    @pytest.mark.parametrize("failure", ["write", "fsync", "replace"])
+    def test_atomic_publication_failure_preserves_predecessor_and_cleans_temp(
+        self, tmp_path: Path, failure: str,
+    ) -> None:
+        initial = bars_to_table("VXHYG", [
+            {"date": "2025-01-02", "open": "10", "high": "11", "low": "9", "close": "10", "volume": "0"},
+        ])
+        path = write_bronze_parquet(initial, "VXHYG", tmp_path)
+        predecessor = path.read_bytes()
+        successor = bars_to_table("VXHYG", [
+            {"date": "2025-01-03", "open": "11", "high": "12", "low": "10", "close": "11", "volume": "0"},
+        ])
+
+        if failure == "write":
+            def partial_write(table, destination, *args, **kwargs):
+                Path(destination).write_bytes(b"PARTIAL")
+                raise OSError("write failed")
+
+            context = patch(
+                "scripts.fetch_cboe_volatility.pq.write_table", side_effect=partial_write,
+            )
+        elif failure == "fsync":
+            context = patch(
+                "scripts.fetch_cboe_volatility.os.fsync", side_effect=OSError("fsync failed"),
+            )
+        else:
+            context = patch(
+                "scripts.fetch_cboe_volatility.os.replace", side_effect=OSError("replace failed"),
+            )
+
+        with context, pytest.raises(OSError, match=f"{failure} failed"):
+            write_bronze_parquet(successor, "VXHYG", tmp_path)
+
+        assert path.read_bytes() == predecessor
+        assert not list(path.parent.glob(".data.parquet.*.tmp"))
+
+    def test_atomic_publication_fsyncs_file_then_parent(self, tmp_path: Path) -> None:
+        table = bars_to_table("VXHYG", [
+            {"date": "2025-01-02", "open": "10", "high": "11", "low": "9", "close": "10", "volume": "0"},
+        ])
+        calls: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            calls.append(fd)
+            real_fsync(fd)
+
+        with patch("scripts.fetch_cboe_volatility.os.fsync", side_effect=record_fsync):
+            write_bronze_parquet(table, "VXHYG", tmp_path)
+
+        assert len(calls) == 2
 
 
 class TestMain:
