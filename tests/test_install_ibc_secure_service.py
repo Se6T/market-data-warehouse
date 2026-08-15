@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import plistlib
 from pathlib import Path
 from types import SimpleNamespace
@@ -455,14 +456,16 @@ class TestFileAndLaunchctlHelpers:
         assert run_mock.call_count == 2
         first, second = run_mock.call_args_list
         assert first.args[0][:2] == ["launchctl", "bootout"]
-        assert second.args[0] == ["launchctl", "bootout", "gui/501/com.example.ibc"]
+        assert second.args[0] == [
+            "launchctl", "bootout", f"gui/{os.getuid()}/com.example.ibc"
+        ]
 
     def test_launchctl_bootstrap(self, tmp_path):
         with patch("scripts.install_ibc_secure_service.subprocess.run") as run_mock:
             launchctl_bootstrap(tmp_path / "agent.plist")
 
         run_mock.assert_called_once_with(
-            ["launchctl", "bootstrap", "gui/501", str(tmp_path / "agent.plist")],
+            ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(tmp_path / "agent.plist")],
             check=True,
             capture_output=True,
             text=True,
