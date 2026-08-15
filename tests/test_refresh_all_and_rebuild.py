@@ -232,7 +232,7 @@ def test_whole_refresh_lock_rejects_concurrent_run_before_any_effect(tmp_path: P
     warehouse = _warehouse(tmp_path)
     config = _config(tmp_path, warehouse)
     old = _seed_old_db(config)
-    lock_path = warehouse / ".mdw-m0-refresh.lock"
+    lock_path = m0._warehouse_refresh_lock_path(warehouse)
     lock_path.touch(mode=0o600)
     with lock_path.open("r+b") as holder:
         fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -251,7 +251,7 @@ def test_whole_refresh_lock_rejects_concurrent_run_before_any_effect(tmp_path: P
 
 def test_stale_unlocked_refresh_lock_is_reusable(tmp_path: Path) -> None:
     config = _config(tmp_path, _warehouse(tmp_path))
-    lock_path = config.warehouse / ".mdw-m0-refresh.lock"
+    lock_path = m0._warehouse_refresh_lock_path(config.warehouse)
     lock_path.write_text("stale pid metadata")
     lock_path.chmod(0o600)
 
@@ -268,15 +268,85 @@ def test_refresh_lock_rejects_replaced_path_and_prevents_dual_acquisition(
     tmp_path: Path,
 ) -> None:
     warehouse = _warehouse(tmp_path)
-    lock_path = warehouse / ".mdw-m0-refresh.lock"
+    displaced = tmp_path / "displaced-warehouse"
 
-    with m0._warehouse_refresh_lock(warehouse):
-        held = warehouse / ".held-lock"
-        lock_path.rename(held)
-        lock_path.touch(mode=0o600)
-        with pytest.raises(m0.RefreshFailure, match="already in progress"):
-            with m0._warehouse_refresh_lock(warehouse):
-                pass
+    with pytest.raises(m0.RefreshFailure, match="warehouse refresh lock root changed"):
+        with m0._warehouse_refresh_lock(warehouse):
+            warehouse.rename(displaced)
+            warehouse.mkdir(mode=0o700)
+            with pytest.raises(m0.RefreshFailure, match="already in progress"):
+                with m0._warehouse_refresh_lock(warehouse):
+                    pass
+
+
+def test_refresh_lock_rejects_parent_path_replacement_during_acquisition(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    parent = tmp_path / "warehouse-parent"
+    warehouse = _warehouse(parent)
+    parent.chmod(0o700)
+    displaced_parent = tmp_path / "displaced-parent"
+    real_flock = fcntl.flock
+    raced = False
+
+    def replace_parent_after_flock(descriptor: int, operation: int) -> None:
+        nonlocal raced
+        real_flock(descriptor, operation)
+        if not raced:
+            raced = True
+            parent.rename(displaced_parent)
+            warehouse.mkdir(parents=True, mode=0o700)
+
+    monkeypatch.setattr(m0.fcntl, "flock", replace_parent_after_flock)
+
+    with pytest.raises(m0.RefreshFailure, match="parent path changed"):
+        with m0._warehouse_refresh_lock(warehouse):
+            pass
+
+
+def test_refresh_lock_rejects_root_path_replacement_during_acquisition(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    displaced = tmp_path / "displaced-warehouse"
+    real_flock = fcntl.flock
+    raced = False
+
+    def replace_root_after_flock(descriptor: int, operation: int) -> None:
+        nonlocal raced
+        real_flock(descriptor, operation)
+        if not raced:
+            raced = True
+            warehouse.rename(displaced)
+            warehouse.mkdir(mode=0o700)
+
+    monkeypatch.setattr(m0.fcntl, "flock", replace_root_after_flock)
+
+    with pytest.raises(m0.RefreshFailure, match="root changed during acquisition"):
+        with m0._warehouse_refresh_lock(warehouse):
+            pass
+
+
+def test_refresh_lock_revalidates_root_before_owner_operations(tmp_path: Path) -> None:
+    warehouse = _warehouse(tmp_path)
+    config = _config(tmp_path, warehouse)
+    displaced = tmp_path / "displaced-warehouse"
+    calls: list[list[str]] = []
+
+    def replace_root(completed: str) -> None:
+        if completed == "inventory":
+            warehouse.rename(displaced)
+            warehouse.mkdir(mode=0o700)
+
+    with pytest.raises(m0.RefreshFailure, match="warehouse refresh lock root changed"):
+        m0.refresh_all_and_rebuild(
+            config,
+            command_runner=_runner(calls),
+            phase_hook=replace_root,
+            source_identity=_identity,
+        )
+
+    assert calls == []
 
 
 @pytest.mark.parametrize("mode", [0o644, 0o660, 0o666])
@@ -284,7 +354,7 @@ def test_refresh_lock_rejects_nonrestrictive_existing_mode(
     tmp_path: Path, mode: int,
 ) -> None:
     warehouse = _warehouse(tmp_path)
-    lock_path = warehouse / ".mdw-m0-refresh.lock"
+    lock_path = m0._warehouse_refresh_lock_path(warehouse)
     lock_path.touch()
     lock_path.chmod(mode)
 
@@ -298,7 +368,7 @@ def test_refresh_lock_rejects_filesystem_aliases_before_inventory(
     tmp_path: Path, attack: str,
 ) -> None:
     config = _config(tmp_path, _warehouse(tmp_path))
-    lock_path = config.warehouse / ".mdw-m0-refresh.lock"
+    lock_path = m0._warehouse_refresh_lock_path(config.warehouse)
     outside = tmp_path / "outside-lock"
     outside.write_text("outside")
     if attack == "symlink":
