@@ -96,6 +96,16 @@ class TestBarsToTable:
         }
         assert table.column("close")[0].as_py() == 10.5
 
+    def test_normalizes_reported_high_low_envelope(self):
+        table = bars_to_table(
+            "VIX",
+            [{"date": "1992-02-11", "open": "19.24", "high": "18.57",
+              "low": "17.61", "close": "17.70", "volume": "0"}],
+        )
+        row = table.to_pylist()[0]
+        assert row["high"] == 19.24
+        assert row["low"] == 17.61
+
     def test_empty_bars_returns_none(self):
         """Empty bars list returns None."""
         assert bars_to_table("VXHYG", []) is None
@@ -278,6 +288,24 @@ class TestWriteBronzeParquet:
         assert set(rewritten.column("symbol_id").to_pylist()) == {
             _symbol_id("VXHYG")
         }
+
+    def test_rewrites_invalid_existing_ohlc_envelope_without_new_rows(self, tmp_path):
+        bars = [
+            {"date": "2025-01-02", "open": "10", "high": "11", "low": "9",
+             "close": "10.5", "volume": "100"},
+        ]
+        table = bars_to_table("VXHYG", bars)
+        path = write_bronze_parquet(table, "VXHYG", tmp_path)
+        invalid = pq.ParquetFile(path).read().set_column(
+            3, "high", pa.array([8.0], type=pa.float64())
+        )
+        pq.write_table(invalid, path)
+
+        write_bronze_parquet(table, "VXHYG", tmp_path)
+
+        row = pq.ParquetFile(path).read().to_pylist()[0]
+        assert row["high"] == 10.5
+        assert row["low"] == 8.0
 
     @pytest.mark.parametrize("failure", ["write", "fsync", "replace"])
     def test_atomic_publication_failure_preserves_predecessor_and_cleans_temp(

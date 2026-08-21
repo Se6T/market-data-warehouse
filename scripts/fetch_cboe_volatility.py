@@ -93,14 +93,18 @@ def bars_to_table(symbol: str, bars: list[dict[str, Any]]) -> pa.Table:
     
     records = []
     for bar in bars:
+        open_price = float(bar["open"])
+        reported_high = float(bar["high"])
+        reported_low = float(bar["low"])
+        close_price = float(bar["close"])
         records.append({
             "trade_date": date.fromisoformat(bar["date"]),
             "symbol_id": symbol_id,
-            "open": float(bar["open"]),
-            "high": float(bar["high"]),
-            "low": float(bar["low"]),
-            "close": float(bar["close"]),
-            "adj_close": float(bar["close"]),  # No adjustment for indices
+            "open": open_price,
+            "high": max(open_price, reported_high, reported_low, close_price),
+            "low": min(open_price, reported_high, reported_low, close_price),
+            "close": close_price,
+            "adj_close": close_price,  # No adjustment for indices
             "volume": int(float(bar["volume"])),
         })
     
@@ -147,6 +151,29 @@ def write_bronze_parquet(
                 "symbol_id",
                 pa.array([canonical_id] * existing.num_rows, type=pa.int64()),
             )
+        existing_rows = existing.to_pylist()
+        normalized_highs = [
+            max(row["open"], row["high"], row["low"], row["close"])
+            for row in existing_rows
+        ]
+        normalized_lows = [
+            min(row["open"], row["high"], row["low"], row["close"])
+            for row in existing_rows
+        ]
+        envelope_changed = any(
+            row["high"] != high or row["low"] != low
+            for row, high, low in zip(existing_rows, normalized_highs, normalized_lows)
+        )
+        if envelope_changed:
+            existing = existing.set_column(
+                existing.column_names.index("high"),
+                "high",
+                pa.array(normalized_highs, type=pa.float64()),
+            ).set_column(
+                existing.column_names.index("low"),
+                "low",
+                pa.array(normalized_lows, type=pa.float64()),
+            )
 
         existing_dates = set(
             d.as_py() for d in existing.column("trade_date")
@@ -164,7 +191,7 @@ def write_bronze_parquet(
         if new_rows.num_rows > 0:
             table = pa.concat_tables([existing, new_rows])
             console.print(f"  {symbol}: merged {new_rows.num_rows} new rows with {existing.num_rows} existing")
-        elif extra_cols or identity_changed:
+        elif extra_cols or identity_changed or envelope_changed:
             # Rewrite stale schema/identity metadata even without new data.
             table = existing
             console.print(f"  {symbol}: rewriting canonical metadata")
