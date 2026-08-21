@@ -17,3 +17,4 @@
 - Broker-preservation mode must batch source-identity verification rather than running Git verification once per preserved symbol, and public writers must canonicalize legacy IDs even when there are no new rows.
 - Immutable per-run evidence must use a unique default path; a fixed `O_EXCL` inventory filename makes a safe retry fail after any earlier run.
 - Broker-preservation mode cannot require broker-backed partitions to reach the requested as-of date; require no regression and enforce current-session completeness only for the public partitions actually refreshed.
+- CBOE daily public history can lag the current exchange session by one trading day; offline public refresh may accept exactly that one-session lag, but no older volatility snapshot.
