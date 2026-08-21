@@ -234,6 +234,17 @@ class TestBronzeClientFutures:
         client.close()
 
     @pytest.mark.integration
+    def test_crypto_uses_equity_style_schema(self, tmp_bronze):
+        with BronzeClient(bronze_dir=tmp_bronze, asset_class="crypto") as crypto:
+            symbol_id = crypto.get_symbol_id("BTC")
+            assert crypto.replace_ticker_rows(
+                "BTC", [_row("2025-01-02", symbol_id, 100_000.0)]
+            ) == 1
+            assert crypto.read_symbol_rows("BTC") == [
+                _row("2025-01-02", symbol_id, 100_000.0)
+            ]
+
+    @pytest.mark.integration
     def test_invalid_asset_class_raises(self, tmp_bronze):
         with pytest.raises(ValueError, match="unsupported asset_class"):
             BronzeClient(bronze_dir=tmp_bronze, asset_class="nope")

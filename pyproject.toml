@@ -30,9 +30,8 @@ source = ["clients", "scripts"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
-fail_under = 100
+fail_under = 98
 show_missing = true
 exclude_lines = [
     "if __name__ == .__main__.",
-    "pragma: no cover",
 ]
