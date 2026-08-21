@@ -611,8 +611,8 @@ def _refresh_inventory(
 ) -> list[dict[str, object]]:
     if steps is None:
         steps = []
+    preservation_since_verification = False
     for ordinal, entry in enumerate(inventory):
-        verify_source()
         if not config.refresh_broker_assets and entry.asset_class in {"equity", "futures"}:
             timestamp = _utc_now()
             steps.append({
@@ -624,7 +624,10 @@ def _refresh_inventory(
                 "exit_code": None,
                 "status": "preserved",
             })
+            preservation_since_verification = True
             continue
+        verify_source()
+        preservation_since_verification = False
         argv = _update_argv(config, entry, scratch / f"preset-{ordinal}.json")
         started = _utc_now()
         try:
@@ -661,6 +664,8 @@ def _refresh_inventory(
             raise RefreshFailure(
                 f"{entry.asset_class}:{entry.symbol} update failed with exit {result.returncode}"
             )
+    if preservation_since_verification:
+        verify_source()
     return steps
 
 
