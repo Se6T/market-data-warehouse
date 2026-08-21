@@ -670,7 +670,11 @@ def _refresh_inventory(
 
 
 def _validate_post_inventory(
-    before: Sequence[InventoryEntry], after: Sequence[InventoryEntry], as_of: date
+    before: Sequence[InventoryEntry],
+    after: Sequence[InventoryEntry],
+    as_of: date,
+    *,
+    refresh_broker_assets: bool = True,
 ) -> None:
     before_map = {(entry.asset_class, entry.symbol): entry for entry in before}
     after_map = {(entry.asset_class, entry.symbol): entry for entry in after}
@@ -684,6 +688,8 @@ def _validate_post_inventory(
         if current.latest_session > as_of.isoformat():
             label = f"{identity[0]}:{identity[1]}"
             raise RefreshFailure(f"{label} latest session exceeds requested as-of")
+        if not refresh_broker_assets and current.asset_class in {"equity", "futures"}:
+            continue
         expected = expected_latest_session(current.asset_class, as_of).isoformat()
         if current.latest_session != expected:
             label = f"{identity[0]}:{identity[1]}"
@@ -1407,7 +1413,12 @@ def _refresh_all_and_rebuild_locked(
         phase_hook("refresh")
 
         after = discover_inventory(bronze_root, require_all_asset_classes=False)
-        _validate_post_inventory(before, after, config.as_of)
+        _validate_post_inventory(
+            before,
+            after,
+            config.as_of,
+            refresh_broker_assets=config.refresh_broker_assets,
+        )
         _build_database(config, temp_db)
         phase_hook("rebuild")
 
