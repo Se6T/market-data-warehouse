@@ -1,6 +1,6 @@
 {
   "name": "r2k-health-care",
-  "description": "Russell 2000 Health Care (395 companies)",
+  "description": "Russell 2000 Health Care (394 companies)",
   "tickers": [
     "ENSG",
     "GH",
@@ -189,7 +189,6 @@
     "PHR",
     "AMPH",
     "ABUS",
-    "TALK",
     "IART",
     "SLS",
     "KURA",
@@ -770,10 +769,6 @@
     [
       "PHR",
       "AMPH"
-    ],
-    [
-      "ABUS",
-      "TALK"
     ],
     [
       "IART",

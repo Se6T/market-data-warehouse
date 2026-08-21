@@ -345,7 +345,7 @@ class DBClient:
         *,
         reset: bool = False,
     ) -> dict[str, int]:
-        """Load one symbol-based asset class, optionally resetting shared tables."""
+        """Load one symbol asset class without erasing earlier classes."""
         bronze_dir = Path(bronze_dir)
         parquet_files = list(bronze_dir.glob("symbol=*/data.parquet"))
         parquet_glob = str(bronze_dir / "symbol=*/data.parquet").replace("'", "''")
@@ -353,8 +353,6 @@ class DBClient:
         self._conn.execute("BEGIN")
         try:
             if reset:
-                # Recreate the shared analytical tables once, then append the
-                # remaining symbol-based asset classes without erasing predecessors.
                 self._conn.execute("DROP TABLE IF EXISTS md.equities_daily")
                 self._conn.execute("DROP TABLE IF EXISTS md.symbols")
                 self._ensure_schema()
@@ -395,9 +393,8 @@ class DBClient:
             """
             SELECT
                 (SELECT count(*) FROM md.symbols WHERE asset_class = ?) AS symbols,
-                (SELECT count(*)
-                 FROM md.equities_daily e
-                 JOIN md.symbols s ON s.symbol_id = e.symbol_id
+                (SELECT count(*) FROM md.equities_daily e
+                 JOIN md.symbols s USING (symbol_id)
                  WHERE s.asset_class = ?) AS rows
             """,
             [asset_class, asset_class],

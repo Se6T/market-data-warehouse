@@ -104,14 +104,6 @@ def _run_result_paths(config: m0.RefreshConfig) -> list[Path]:
     )
 
 
-def _bronze_hashes(warehouse: Path) -> dict[str, str]:
-    bronze = warehouse / "data-lake" / "bronze"
-    return {
-        path.relative_to(bronze).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(bronze.glob("asset_class=*/symbol=*/data.parquet"))
-    }
-
-
 def test_discover_inventory_is_complete_canonical_and_content_bound(tmp_path: Path) -> None:
     warehouse = _warehouse(tmp_path)
     inventory = m0.discover_inventory(warehouse / "data-lake" / "bronze")
@@ -191,6 +183,43 @@ def test_success_refreshes_each_identity_and_publishes_manifest(tmp_path: Path) 
     assert _run_result_paths(config) == []
 
 
+def test_public_only_refresh_preserves_broker_assets_and_all_database_partitions(
+    tmp_path: Path,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    futures_file = next(
+        warehouse.glob("data-lake/bronze/asset_class=futures/symbol=*/data.parquet")
+    )
+    futures_file.unlink()
+    futures_file.parent.rmdir()
+    futures_file.parent.parent.rmdir()
+    config = _config(tmp_path, warehouse)
+    object.__setattr__(config, "refresh_broker_assets", False)
+    calls: list[list[str]] = []
+
+    manifest = m0.refresh_all_and_rebuild(
+        config,
+        command_runner=_runner(calls),
+        source_identity=_identity,
+    )
+
+    assert len(calls) == 2
+    assert all("daily_update.py" not in " ".join(call) for call in calls)
+    assert {step["status"] for step in manifest["steps"]} == {"preserved", "succeeded"}
+    assert manifest["row_counts"] == {
+        "md.equities_daily": 3,
+        "md.futures_daily": 0,
+        "md.symbols": 3,
+    }
+    connection = duckdb.connect(str(config.db_path), read_only=True)
+    try:
+        assert connection.execute(
+            "SELECT asset_class, count(*) FROM md.symbols GROUP BY 1 ORDER BY 1"
+        ).fetchall() == [("crypto", 1), ("equity", 1), ("volatility", 1)]
+    finally:
+        connection.close()
+
+
 def test_success_evidence_is_committed_with_bundle_before_external_audit_can_fail(
     tmp_path: Path,
 ) -> None:
@@ -212,6 +241,100 @@ def test_success_evidence_is_committed_with_bundle_before_external_audit_can_fai
     assert [step["status"] for step in committed["run_result"]["steps"]] == [
         "succeeded",
     ] * 4
+
+
+def test_reader_visible_success_suppresses_failure_audit_under_compound_faults(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, _warehouse(tmp_path))
+    old = _seed_old_db(config)
+    real_replace, real_fsync = os.replace, m0._fsync_directory
+    replacements = parent_fsyncs = 0
+
+    def replace(source, destination) -> None:
+        nonlocal replacements
+        replacements += 1
+        if replacements == 3:
+            raise OSError("pending marker restoration failed")
+        if replacements == 4:
+            raise OSError("pointer rollback failed")
+        real_replace(source, destination)
+
+    def fsync(path: Path) -> None:
+        nonlocal parent_fsyncs
+        if path == config.db_path.parent.parent:
+            parent_fsyncs += 1
+            if parent_fsyncs == 3:
+                raise OSError("committed marker fsync failed")
+        real_fsync(path)
+
+    with patch.object(m0.os, "replace", side_effect=replace), patch.object(
+        m0, "_fsync_directory", side_effect=fsync,
+    ), patch.object(
+        m0, "_write_run_result", side_effect=OSError("failure audit fsync failed"),
+    ) as writer:
+        manifest = m0.refresh_all_and_rebuild(
+            config, command_runner=_runner([]), source_identity=_identity,
+        )
+
+    writer.assert_not_called()
+    assert config.db_path.read_bytes() != old
+    committed = json.loads(m0.resolve_current_bundle(
+        config.db_path, config.manifest_path,
+    ).manifest.read_text())
+    assert committed == manifest
+    assert committed["run_result"]["outcome"] == "succeeded"
+
+
+def test_reported_persistent_fsync_failure_keeps_reader_on_predecessor(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, _warehouse(tmp_path))
+    old = _seed_old_db(config)
+    publication_failure = OSError("persistent publication fsync failure")
+    audit_failure = OSError("failure audit fsync failed")
+    real_replace, real_fsync = os.replace, m0._fsync_directory
+    real_resolve = m0.resolve_current_bundle
+    replacements = parent_fsyncs = resolutions = 0
+
+    def replace(source, destination) -> None:
+        nonlocal replacements
+        replacements += 1
+        if replacements == 4:
+            raise OSError("pointer rollback failed")
+        real_replace(source, destination)
+
+    def fsync(path: Path) -> None:
+        nonlocal parent_fsyncs
+        if path == config.db_path.parent.parent:
+            parent_fsyncs += 1
+            if parent_fsyncs >= 3:
+                raise publication_failure
+        real_fsync(path)
+
+    def resolve(db_path: Path, manifest_path: Path) -> m0.PublishedBundle:
+        nonlocal resolutions
+        resolutions += 1
+        if resolutions == 2:
+            raise OSError("reconciliation read failed")
+        return real_resolve(db_path, manifest_path)
+
+    with patch.object(m0.os, "replace", side_effect=replace), patch.object(
+        m0, "_fsync_directory", side_effect=fsync,
+    ), patch.object(
+        m0, "resolve_current_bundle", side_effect=resolve,
+    ), patch.object(m0, "_write_run_result", side_effect=audit_failure), pytest.raises(
+        OSError, match="persistent publication fsync failure",
+    ) as raised:
+        m0.refresh_all_and_rebuild(
+            config, command_runner=_runner([]), source_identity=_identity,
+        )
+
+    assert raised.value is publication_failure
+    assert raised.value.__cause__ is audit_failure
+    visible = m0.resolve_current_bundle(config.db_path, config.manifest_path)
+    assert visible.database.read_bytes() == old
+    assert json.loads(visible.manifest.read_text())["generation"] == "old"
 
 
 def test_failure_evidence_fault_preserves_original_error_and_chains_audit_fault(
@@ -240,7 +363,7 @@ def test_whole_refresh_lock_rejects_concurrent_run_before_any_effect(tmp_path: P
     warehouse = _warehouse(tmp_path)
     config = _config(tmp_path, warehouse)
     old = _seed_old_db(config)
-    lock_path = m0._warehouse_refresh_lock_path(warehouse)
+    lock_path = warehouse / ".mdw-m0-refresh.lock"
     lock_path.touch(mode=0o600)
     with lock_path.open("r+b") as holder:
         fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -259,7 +382,7 @@ def test_whole_refresh_lock_rejects_concurrent_run_before_any_effect(tmp_path: P
 
 def test_stale_unlocked_refresh_lock_is_reusable(tmp_path: Path) -> None:
     config = _config(tmp_path, _warehouse(tmp_path))
-    lock_path = m0._warehouse_refresh_lock_path(config.warehouse)
+    lock_path = config.warehouse / ".mdw-m0-refresh.lock"
     lock_path.write_text("stale pid metadata")
     lock_path.chmod(0o600)
 
@@ -276,85 +399,15 @@ def test_refresh_lock_rejects_replaced_path_and_prevents_dual_acquisition(
     tmp_path: Path,
 ) -> None:
     warehouse = _warehouse(tmp_path)
-    displaced = tmp_path / "displaced-warehouse"
+    lock_path = warehouse / ".mdw-m0-refresh.lock"
 
-    with pytest.raises(m0.RefreshFailure, match="warehouse refresh lock root changed"):
-        with m0._warehouse_refresh_lock(warehouse):
-            warehouse.rename(displaced)
-            warehouse.mkdir(mode=0o700)
-            with pytest.raises(m0.RefreshFailure, match="already in progress"):
-                with m0._warehouse_refresh_lock(warehouse):
-                    pass
-
-
-def test_refresh_lock_rejects_parent_path_replacement_during_acquisition(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    parent = tmp_path / "warehouse-parent"
-    warehouse = _warehouse(parent)
-    parent.chmod(0o700)
-    displaced_parent = tmp_path / "displaced-parent"
-    real_flock = fcntl.flock
-    raced = False
-
-    def replace_parent_after_flock(descriptor: int, operation: int) -> None:
-        nonlocal raced
-        real_flock(descriptor, operation)
-        if not raced:
-            raced = True
-            parent.rename(displaced_parent)
-            warehouse.mkdir(parents=True, mode=0o700)
-
-    monkeypatch.setattr(m0.fcntl, "flock", replace_parent_after_flock)
-
-    with pytest.raises(m0.RefreshFailure, match="parent path changed"):
-        with m0._warehouse_refresh_lock(warehouse):
-            pass
-
-
-def test_refresh_lock_rejects_root_path_replacement_during_acquisition(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    warehouse = _warehouse(tmp_path)
-    displaced = tmp_path / "displaced-warehouse"
-    real_flock = fcntl.flock
-    raced = False
-
-    def replace_root_after_flock(descriptor: int, operation: int) -> None:
-        nonlocal raced
-        real_flock(descriptor, operation)
-        if not raced:
-            raced = True
-            warehouse.rename(displaced)
-            warehouse.mkdir(mode=0o700)
-
-    monkeypatch.setattr(m0.fcntl, "flock", replace_root_after_flock)
-
-    with pytest.raises(m0.RefreshFailure, match="root changed during acquisition"):
-        with m0._warehouse_refresh_lock(warehouse):
-            pass
-
-
-def test_refresh_lock_revalidates_root_before_owner_operations(tmp_path: Path) -> None:
-    warehouse = _warehouse(tmp_path)
-    config = _config(tmp_path, warehouse)
-    displaced = tmp_path / "displaced-warehouse"
-    calls: list[list[str]] = []
-
-    def replace_root(completed: str) -> None:
-        if completed == "inventory":
-            warehouse.rename(displaced)
-            warehouse.mkdir(mode=0o700)
-
-    with pytest.raises(m0.RefreshFailure, match="warehouse refresh lock root changed"):
-        m0.refresh_all_and_rebuild(
-            config,
-            command_runner=_runner(calls),
-            phase_hook=replace_root,
-            source_identity=_identity,
-        )
-
-    assert calls == []
+    with m0._warehouse_refresh_lock(warehouse):
+        held = warehouse / ".held-lock"
+        lock_path.rename(held)
+        lock_path.touch(mode=0o600)
+        with pytest.raises(m0.RefreshFailure, match="already in progress"):
+            with m0._warehouse_refresh_lock(warehouse):
+                pass
 
 
 @pytest.mark.parametrize("mode", [0o644, 0o660, 0o666])
@@ -362,7 +415,7 @@ def test_refresh_lock_rejects_nonrestrictive_existing_mode(
     tmp_path: Path, mode: int,
 ) -> None:
     warehouse = _warehouse(tmp_path)
-    lock_path = m0._warehouse_refresh_lock_path(warehouse)
+    lock_path = warehouse / ".mdw-m0-refresh.lock"
     lock_path.touch()
     lock_path.chmod(mode)
 
@@ -376,7 +429,7 @@ def test_refresh_lock_rejects_filesystem_aliases_before_inventory(
     tmp_path: Path, attack: str,
 ) -> None:
     config = _config(tmp_path, _warehouse(tmp_path))
-    lock_path = m0._warehouse_refresh_lock_path(config.warehouse)
+    lock_path = config.warehouse / ".mdw-m0-refresh.lock"
     outside = tmp_path / "outside-lock"
     outside.write_text("outside")
     if attack == "symlink":
@@ -452,10 +505,7 @@ def test_update_failure_and_inventory_drift_preserve_db(tmp_path: Path) -> None:
         nonlocal calls
         calls += 1
         if calls == 1:
-            staged = Path(argv[argv.index("--warehouse") + 1])
-            staged.joinpath(
-                "data-lake/bronze/asset_class=crypto/symbol=BTC/data.parquet"
-            ).unlink()
+            (warehouse / "data-lake/bronze/asset_class=crypto/symbol=BTC/data.parquet").unlink()
         return subprocess.CompletedProcess(argv, 0, "", "")
     with pytest.raises(m0.RefreshFailure, match="inventory identities changed"):
         m0.refresh_all_and_rebuild(config, command_runner=remove, source_identity=_identity)
@@ -493,93 +543,6 @@ def test_owner_exception_records_failed_and_not_attempted_identities(tmp_path: P
     assert b"SECRET" not in result_bytes
     assert config.db_path.read_bytes() == old
     assert json.loads(config.manifest_path.read_text())["generation"] == "old"
-
-
-def test_first_owner_success_second_failure_preserves_every_canonical_bronze_byte(
-    tmp_path: Path,
-) -> None:
-    warehouse = _warehouse(tmp_path)
-    config = _config(tmp_path, warehouse)
-    old_db = _seed_old_db(config)
-    before = _bronze_hashes(warehouse)
-    staged_warehouses: list[Path] = []
-    calls = 0
-
-    def mutate_first_then_fail(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        nonlocal calls
-        calls += 1
-        if "--warehouse" in argv:
-            staged_warehouses.append(Path(argv[argv.index("--warehouse") + 1]))
-        if calls == 1:
-            owner_warehouse = staged_warehouses[-1]
-            with BronzeClient(
-                owner_warehouse / "data-lake/bronze/asset_class=crypto",
-                asset_class="crypto",
-            ) as client:
-                client.merge_ticker_rows("BTC", [_daily_row("2025-01-03", 91000)])
-            return subprocess.CompletedProcess(argv, 0, "", "")
-        raise TimeoutError("second owner failed")
-
-    with pytest.raises(TimeoutError, match="second owner failed"):
-        m0.refresh_all_and_rebuild(
-            config, command_runner=mutate_first_then_fail, source_identity=_identity,
-        )
-
-    assert staged_warehouses and all(path != warehouse for path in staged_warehouses)
-    assert _bronze_hashes(warehouse) == before
-    assert config.db_path.read_bytes() == old_db
-
-
-def test_success_publishes_matching_bronze_database_and_all_identity_evidence(
-    tmp_path: Path,
-) -> None:
-    warehouse = _warehouse(tmp_path)
-    config = _config(tmp_path, warehouse)
-    _seed_old_db(config)
-    staged: Path | None = None
-
-    def refresh(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        nonlocal staged
-        if "--warehouse" in argv:
-            staged = Path(argv[argv.index("--warehouse") + 1])
-        assert staged is not None and staged != warehouse
-        if "fetch_binance_crypto.py" in " ".join(argv):
-            with BronzeClient(
-                staged / "data-lake/bronze/asset_class=crypto", asset_class="crypto",
-            ) as client:
-                client.merge_ticker_rows("BTC", [_daily_row("2025-01-03", 91000)])
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    object.__setattr__(config, "as_of", date(2025, 1, 3))
-    for asset_class, symbol in (("equity", "AAPL"), ("volatility", "VIX")):
-        root = warehouse / f"data-lake/bronze/asset_class={asset_class}"
-        with BronzeClient(root, asset_class=asset_class) as client:
-            client.merge_ticker_rows(symbol, [_daily_row("2025-01-03")])
-    with BronzeClient(
-        warehouse / "data-lake/bronze/asset_class=futures", asset_class="futures",
-    ) as client:
-        client.merge_ticker_rows("ES_202506", [_futures_row("2025-01-03")])
-    before = _bronze_hashes(warehouse)
-
-    manifest = m0.refresh_all_and_rebuild(
-        config, command_runner=refresh, source_identity=_identity,
-    )
-
-    after = _bronze_hashes(warehouse)
-    assert after != before
-    assert manifest["bronze_sha256"] == hashlib.sha256(
-        m0._canonical_bytes(after)
-    ).hexdigest()
-    evidence = {
-        (item["asset_class"], item["symbol"]): item["sha256"]
-        for item in manifest["post_refresh_inventory"]
-    }
-    assert evidence == {
-        (entry.asset_class, entry.symbol): entry.sha256
-        for entry in m0.discover_inventory(warehouse / "data-lake" / "bronze")
-    }
-    pinned = m0.resolve_current_bundle(config.db_path, config.manifest_path)
-    assert pinned.bronze == (warehouse / "data-lake" / "bronze").resolve()
 
 
 def test_zero_exit_noop_owner_cannot_publish_stale_identity(tmp_path: Path) -> None:
@@ -620,8 +583,7 @@ def test_terminal_latest_session_is_fail_closed(tmp_path: Path, new_day: str, me
     old = _seed_old_db(config)
     def mutate(argv: list[str]) -> subprocess.CompletedProcess[str]:
         if "fetch_binance_crypto.py" in " ".join(argv):
-            staged = Path(argv[argv.index("--warehouse") + 1])
-            root = staged / "data-lake/bronze/asset_class=crypto"
+            root = warehouse / "data-lake/bronze/asset_class=crypto"
             with BronzeClient(root, asset_class="crypto") as client:
                 if new_day < "2025-01-02":
                     client.replace_ticker_rows("BTC", [_daily_row(new_day)])
@@ -1394,7 +1356,7 @@ def test_post_commit_marker_cleanup_faults_leave_reader_recognized_success(
     assert m0.resolve_current_bundle(db_path, manifest_path).database.read_bytes() == b"new-db"
 
 
-def test_marker_commit_failure_with_rollback_fault_never_reports_success(
+def test_compound_commit_fault_returns_success_when_fresh_reader_admits_successor(
     tmp_path: Path,
 ) -> None:
     current = tmp_path / "published" / "current"
@@ -1428,11 +1390,15 @@ def test_marker_commit_failure_with_rollback_fault_never_reports_success(
 
     with patch.object(m0.os, "replace", side_effect=replace), patch.object(
         m0, "_fsync_directory", side_effect=fsync,
-    ), pytest.raises(OSError, match="marker commit fsync failed"):
+    ):
         m0._atomic_publish_bundle(candidate, db_path, manifest_path, {
             "generation": "new",
             "database_sha256": hashlib.sha256(b"new-db").hexdigest(),
         })
+
+    visible = m0.resolve_current_bundle(db_path, manifest_path)
+    assert visible.database.read_bytes() == b"new-db"
+    assert json.loads(visible.manifest.read_text())["generation"] == "new"
 
 
 def test_post_replace_validation_and_failed_rollback_leave_durable_reader_guard(tmp_path: Path) -> None:
@@ -1537,20 +1503,18 @@ def test_source_mutation_in_publication_window_blocks_and_rolls_back(
             (repo / "scripts" / "publication_helper.py").write_text("# untracked drift\n")
 
     if injection == "publish_entry":
-        real_publish = m0._atomic_publish_shared_generation
+        real_publish = m0._atomic_publish_bundle
 
         def publish(*args, **kwargs) -> None:
             mutate()
             real_publish(*args, **kwargs)
 
-        publication_patch = patch.object(
-            m0, "_atomic_publish_shared_generation", side_effect=publish,
-        )
+        publication_patch = patch.object(m0, "_atomic_publish_bundle", side_effect=publish)
     elif injection == "pointer_replace":
         real_replace = os.replace
 
         def replace(source, destination) -> None:
-            if Path(destination) == config.warehouse / ".mdw-m0-current":
+            if Path(destination) == config.db_path.parent:
                 mutate()
             real_replace(source, destination)
 
@@ -1563,12 +1527,12 @@ def test_source_mutation_in_publication_window_blocks_and_rolls_back(
         def replace(source, destination) -> None:
             nonlocal promoted
             real_replace(source, destination)
-            if Path(destination) == config.warehouse / ".mdw-m0-current":
+            if Path(destination) == config.db_path.parent:
                 promoted = True
 
         def fsync_directory(path: Path) -> None:
             real_fsync_directory(path)
-            if promoted and Path(path) == config.warehouse:
+            if promoted and Path(path) == config.db_path.parent.parent:
                 mutate()
 
         publication_patch = contextlib.ExitStack()

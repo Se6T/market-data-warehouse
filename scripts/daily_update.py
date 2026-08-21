@@ -92,6 +92,10 @@ ROOT_EXCHANGE_MAP = {
     "GC": "COMEX", "SI": "COMEX",
 }
 
+# Contract overrides are intentionally empty after WVE's 2026 redomiciliation;
+# unpinned SMART qualification resolves its current NASDAQ contract.
+EQUITY_CONID_OVERRIDES: dict[str, int] = {}
+
 
 def _make_contract(ticker: str, asset_class: str = "equity"):
     """Build an IB contract for the given *ticker* and *asset_class*."""
@@ -101,6 +105,9 @@ def _make_contract(ticker: str, asset_class: str = "equity"):
         return Future(root, expiry, exch, "USD")
     if asset_class == "volatility":
         return Index(ticker, "CBOE", "USD")
+    con_id = EQUITY_CONID_OVERRIDES.get(ticker)
+    if con_id is not None:
+        return Stock(ticker, "SMART", "USD", conId=con_id)
     return Stock(ticker, "SMART", "USD")
 
 

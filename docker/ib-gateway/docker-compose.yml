@@ -5,11 +5,17 @@ services:
     environment:
       TWS_USERID: ${TWS_USERID}
       TWS_PASSWORD_FILE: /run/secrets/ib_password
-      TRADING_MODE: ${TRADING_MODE:-paper}
-      READ_ONLY_API: ${READ_ONLY_API:-yes}
+      TWS_USERID_PAPER: ${TWS_USERID_PAPER:-${TWS_USERID}}
+      TWS_PASSWORD_PAPER_FILE: /run/secrets/ib_password
+      # This canonical stack is PAPER-only. LIVE trading uses the separate,
+      # explicitly approved oquants-live stack; do not allow an inherited shell
+      # variable to silently switch this container back to LIVE.
+      TRADING_MODE: paper
+      TWS_ACCEPT_INCOMING: ${TWS_ACCEPT_INCOMING:-accept}
+      READ_ONLY_API: ${READ_ONLY_API:-no}
       VNC_SERVER_PASSWORD: ${VNC_SERVER_PASSWORD:-}
-      TWOFA_TIMEOUT_ACTION: restart
-      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+      TWOFA_TIMEOUT_ACTION: ${TWOFA_TIMEOUT_ACTION:-exit}
+      RELOGIN_AFTER_TWOFA_TIMEOUT: ${RELOGIN_AFTER_TWOFA_TIMEOUT:-no}
       EXISTING_SESSION_DETECTED_ACTION: primary
     ports:
       - "127.0.0.1:${IB_LIVE_PORT:-4001}:4003"
@@ -20,7 +26,7 @@ services:
     volumes:
       - ib-gateway-settings:/home/ibgateway/Jts
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "4003"]
+      test: ["CMD-SHELL", "bash -lc '</dev/tcp/127.0.0.1/4004'"]
       interval: 30s
       timeout: 10s
       retries: 5

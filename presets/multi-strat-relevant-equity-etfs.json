@@ -1,0 +1,27 @@
+{
+  "name": "multi_strat_relevant_equity_etfs",
+  "description": "Focused IBKR equity/ETF universe for multi-strat-algo proposed strategies: STRC baseline, cash ETFs, crypto ETFs, volatility ETPs, covered-call ETFs, low-vol ETFs, commodity ETF.",
+  "source": "/home/sebastian/projects/multi-strat-algo/docs/strategy_candidates.md and results/data_audit.json",
+  "tickers": [
+    "STRC",
+    "SGOV",
+    "BIL",
+    "SHV",
+    "BOXX",
+    "IBIT",
+    "ETHA",
+    "BITO",
+    "SVIX",
+    "SVXY",
+    "VIXY",
+    "VXX",
+    "JEPI",
+    "JEPQ",
+    "QYLD",
+    "XYLD",
+    "USMV",
+    "SPLV",
+    "DBC"
+  ],
+  "notes": "CBOE volatility indices such as VIX, VVIX, VXHYG are fetched separately via scripts/fetch_cboe_volatility.py, not this IB equity/ETF preset. Crypto exchange OHLCV/funding is not covered by this IB preset."
+}

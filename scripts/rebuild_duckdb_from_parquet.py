@@ -20,7 +20,7 @@ DATA_LAKE = Path.home() / "market-warehouse" / "data-lake"
 DEFAULT_BRONZE_DIR = DATA_LAKE / "bronze" / "asset_class=equity"
 DEFAULT_DB_PATH = Path.home() / "market-warehouse" / "duckdb" / "market.duckdb"
 
-VENUE_MAP = {"equity": "SMART", "volatility": "CBOE", "futures": "CME"}
+VENUE_MAP = {"equity": "SMART", "volatility": "CBOE", "crypto": "COINGECKO", "futures": "CME"}
 
 console = Console()
 
@@ -41,7 +41,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--asset-class",
-        choices=["equity", "volatility", "futures"],
+        choices=["equity", "volatility", "crypto", "futures"],
         default="equity",
         help="Asset class to rebuild (default: equity)",
     )

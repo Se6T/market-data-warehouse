@@ -142,6 +142,21 @@ def test_config_rejects_unsafe_output_layouts(tmp_path: Path, attack: str) -> No
         m0._validate_config(config)
 
 
+def test_config_rejects_non_boolean_broker_refresh_flag(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    object.__setattr__(config, "refresh_broker_assets", 1)
+    with pytest.raises(m0.RefreshFailure, match="exact bool"):
+        m0._validate_config(config)
+
+
+def test_refresh_rejects_empty_canonical_inventory(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    (config.warehouse / "data-lake" / "bronze").mkdir(parents=True)
+    identity = lambda _root: {"commit": "a" * 40, "tree": "b" * 40}
+    with pytest.raises(m0.RefreshFailure, match="inventory is empty"):
+        m0.refresh_all_and_rebuild(config, source_identity=identity)
+
+
 @pytest.mark.parametrize("attack", ["bronze", "asset", "parquet"])
 def test_inventory_rejects_symlinked_canonical_layers(tmp_path: Path, attack: str) -> None:
     real = tmp_path / "real"
@@ -630,11 +645,10 @@ def test_refresh_lock_rejects_unsafe_root_missing_name_alias_and_post_lock_swap(
 
     missing_name = tmp_path / "missing-name"
     missing_name.mkdir(mode=0o700)
-    missing_lock_name = m0._warehouse_refresh_lock_path(missing_name).name
     real_stat = os.stat
 
     def fail_lock_stat(path, *args, dir_fd=None, follow_symlinks=True):
-        if path == missing_lock_name and dir_fd is not None:
+        if path == ".mdw-m0-refresh.lock" and dir_fd is not None:
             raise OSError("removed")
         return real_stat(path, *args, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
 
@@ -647,7 +661,7 @@ def test_refresh_lock_rejects_unsafe_root_missing_name_alias_and_post_lock_swap(
 
     aliased = tmp_path / "aliased"
     aliased.mkdir(mode=0o700)
-    lock = m0._warehouse_refresh_lock_path(aliased)
+    lock = aliased / ".mdw-m0-refresh.lock"
     lock.write_bytes(b"")
     lock.chmod(0o600)
     os.link(lock, tmp_path / "lock-alias")
@@ -657,13 +671,12 @@ def test_refresh_lock_rejects_unsafe_root_missing_name_alias_and_post_lock_swap(
 
     swapped = tmp_path / "swapped"
     swapped.mkdir(mode=0o700)
-    swapped_lock_name = m0._warehouse_refresh_lock_path(swapped).name
     calls = 0
 
     def swap_after_flock(path, *args, dir_fd=None, follow_symlinks=True):
         nonlocal calls
         value = real_stat(path, *args, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
-        if path == swapped_lock_name and dir_fd is not None:
+        if path == ".mdw-m0-refresh.lock" and dir_fd is not None:
             calls += 1
             if calls == 2:
                 return SimpleNamespace(st_dev=value.st_dev, st_ino=value.st_ino + 1)

@@ -23,6 +23,7 @@ Market Data Warehouse is designed for storing and analyzing historical **OHLCV d
   * **Equities (IB)**
   * **Futures (IB)**
   * **Volatility indices (CBOE API)**
+  * **Crypto daily OHLCV (CoinGecko API)**
 * Per-ticker **bronze Parquet snapshots**
 * **Atomic writes + validation**
 * **Fallback recovery pipeline** for missing data
@@ -72,6 +73,7 @@ Raw → Bronze → Silver → Gold
 │   ├── bronze/
 │   │   ├── asset_class=equity/symbol=AAPL/data.parquet
 │   │   ├── asset_class=volatility/symbol=VIX/data.parquet
+│   │   ├── asset_class=crypto/symbol=BTC/data.parquet
 │   │   └── asset_class=futures/symbol=ES_202506/data.parquet
 │   ├── silver/
 │   └── gold/
@@ -277,6 +279,9 @@ python scripts/fetch_ib_historical.py --preset presets/futures-index.json --asse
 
 # Volatility (CBOE direct)
 python scripts/fetch_cboe_volatility.py
+
+# Crypto daily OHLCV (CoinGecko; optional COINGECKO_API_KEY)
+python scripts/fetch_coingecko_crypto.py --symbols BTC ETH --frequency daily --start 2024-01-01 --end 2024-12-31
 ```
 
 ---

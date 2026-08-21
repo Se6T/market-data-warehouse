@@ -1,6 +1,6 @@
 {
   "name": "r2k-consumer-discretionary",
-  "description": "Russell 2000 Consumer Discretionary (197 companies)",
+  "description": "Russell 2000 Consumer Discretionary (196 companies)",
   "tickers": [
     "IBP",
     "TMHC",
@@ -137,7 +137,6 @@
     "SCVL",
     "SFIX",
     "STRT",
-    "BBBY",
     "PTLO",
     "ZUMZ",
     "SVV",
@@ -468,10 +467,6 @@
     [
       "SCVL",
       "SFIX"
-    ],
-    [
-      "STRT",
-      "BBBY"
     ],
     [
       "PTLO",

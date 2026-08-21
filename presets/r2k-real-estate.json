@@ -1,6 +1,6 @@
 {
   "name": "r2k-real-estate",
-  "description": "Russell 2000 Real Estate (99 companies)",
+  "description": "Russell 2000 Real Estate (98 companies)",
   "tickers": [
     "CTRE",
     "AHR",
@@ -93,7 +93,6 @@
     "BRT",
     "BHR",
     "SEG",
-    "MDV",
     "MLP",
     "RMAX",
     "STRW",
@@ -282,10 +281,6 @@
     [
       "BRT",
       "BHR"
-    ],
-    [
-      "SEG",
-      "MDV"
     ],
     [
       "MLP",

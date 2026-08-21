@@ -26,6 +26,7 @@ market-data-warehouse/              # Git repo
 ├── scripts/
 │   ├── setup_market_warehouse.sh   # One-time system bootstrap
 │   ├── fetch_ib_historical.py      # Bulk historical OHLCV ingestion from IB (supports --backfill, --asset-class)
+│   ├── fetch_coingecko_crypto.py   # CoinGecko daily crypto OHLCV ingestion into asset_class=crypto bronze parquet
 │   ├── run_backfill_all.sh         # Auto-restarting runner for all presets
 │   ├── daily_update.py             # Daily parquet-first incremental update
 │   ├── run_daily_update_job.py     # Retrying scheduled daily-update runner
@@ -89,6 +90,7 @@ Schema `md` with four tables:
 - `md.symbols` — `symbol_id BIGINT PK`, `symbol`, `asset_class`, `venue`
 - `md.equities_daily` — `trade_date DATE`, `symbol_id BIGINT`, OHLCV + `adj_close`; unique index on `(trade_date, symbol_id)` for dedup
 - `md.futures_daily` — trade_date, contract_id, root_symbol, expiry_date, OHLCV + settlement + open_interest; unique index on `(trade_date, contract_id)` for dedup; no `md.symbols` entries — self-contained with embedded `root_symbol`
+- `asset_class=crypto` bronze parquet rebuilds into `md.symbols`/`md.equities_daily` with venue `COINGECKO` using the same daily OHLCV column shape as equities/volatility
 - `md.options_daily` — trade_date, contract_id, underlier_id, expiry, strike, `option_right` (not `right` — reserved keyword), OHLCV + OI + implied_vol
 
 ClickHouse mirrors the same schema with MergeTree engines partitioned by `toYYYYMM(trade_date)`.
@@ -156,6 +158,7 @@ Data source: **Interactive Brokers** via `ib_insync`. Requires IB Gateway runnin
 - `DBClient` is now the offline analytical-file client: it can still manage/query `md.*`, and it rebuilds DuckDB from bronze parquet with set-based `INSERT INTO ... SELECT`
 - `adj_close` is set to `close` (IB TRADES data doesn't provide adjusted prices)
 - **CBOE volatility indices** are fetched directly from CBOE's public API (`cdn.cboe.com/api/global/delayed_quotes/charts/historical/`) via `scripts/fetch_cboe_volatility.py`, not IB. This is the authoritative source for VIX, VVIX, VXHYG, VXSMH, and all other CBOE volatility indices. The writer normalizes stale parquet schemas on merge (drops extra columns from older schema versions) and rewrites files to fix schema drift even when no new data is available.
+- **CoinGecko crypto daily OHLCV** is fetched via `scripts/fetch_coingecko_crypto.py` into `data-lake/bronze/asset_class=crypto/`. CoinGecko OHLC bars are joined with `market_chart/range` quote-volume data; API keys are read from `COINGECKO_API_KEY` or `--api-key` and must not be logged.
 
 ### IB BarData → Bronze mapping
 
@@ -199,6 +202,7 @@ python scripts/fetch_ib_historical.py --preset presets/volatility.json --asset-c
 python scripts/fetch_cboe_volatility.py                                                        # CBOE vol indices (daily sync, preferred)
 python scripts/fetch_ib_historical.py --preset presets/futures-index.json --asset-class futures  # CME/CBOT index futures
 python scripts/fetch_ib_historical.py --preset presets/futures-energy.json --asset-class futures  # NYMEX energy futures
+python scripts/fetch_coingecko_crypto.py --symbols BTC ETH --frequency daily --start 2024-01-01 --end 2024-12-31  # CoinGecko crypto daily OHLCV
 python scripts/fetch_ib_historical.py --host 192.168.1.50 --port 4001 --tickers AAPL            # Remote IB Gateway
 ```
 
