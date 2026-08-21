@@ -10,7 +10,7 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import duckdb
 import pyarrow as pa
@@ -240,6 +240,30 @@ def test_public_only_refresh_preserves_broker_assets_and_all_database_partitions
         ).fetchall() == [("crypto", 1), ("equity", 1), ("volatility", 1)]
     finally:
         connection.close()
+
+
+def test_preserved_broker_inventory_verifies_source_once_per_batch(tmp_path: Path) -> None:
+    config = _config(tmp_path, _warehouse(tmp_path))
+    object.__setattr__(config, "refresh_broker_assets", False)
+    broker_entries = [
+        entry
+        for entry in m0.discover_inventory(
+            config.warehouse / "data-lake" / "bronze"
+        )
+        if entry.asset_class in {"equity", "futures"}
+    ]
+    verifier = MagicMock()
+
+    steps = m0._refresh_inventory(
+        config,
+        broker_entries,
+        _runner([]),
+        tmp_path,
+        verify_source=verifier,
+    )
+
+    assert [step["status"] for step in steps] == ["preserved", "preserved"]
+    verifier.assert_called_once_with()
 
 
 def test_success_evidence_is_committed_with_bundle_before_external_audit_can_fail(

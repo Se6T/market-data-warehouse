@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import uuid
 from datetime import date
 from pathlib import Path
@@ -18,9 +19,13 @@ from typing import Any
 
 import httpx
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from rich.console import Console
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover - standalone script path
+    sys.path.insert(0, str(PROJECT_ROOT))
 from clients.symbol_ids import stable_symbol_id
 
 console = Console()
@@ -132,14 +137,24 @@ def write_bronze_parquet(
         extra_cols = set(existing.column_names) - set(expected_columns)
         if extra_cols:
             existing = existing.select(expected_columns)
+        canonical_id = _symbol_id(symbol)
+        identity_changed = set(existing.column("symbol_id").to_pylist()) != {
+            canonical_id
+        }
+        if identity_changed:
+            existing = existing.set_column(
+                existing.column_names.index("symbol_id"),
+                "symbol_id",
+                pa.array([canonical_id] * existing.num_rows, type=pa.int64()),
+            )
 
         existing_dates = set(
             d.as_py() for d in existing.column("trade_date")
         )
 
         # Filter to only new dates
-        new_dates_mask = pa.compute.invert(
-            pa.compute.is_in(
+        new_dates_mask = pc.invert(
+            pc.is_in(
                 table.column("trade_date"),
                 pa.array(list(existing_dates), type=pa.date32()),
             )
@@ -149,16 +164,16 @@ def write_bronze_parquet(
         if new_rows.num_rows > 0:
             table = pa.concat_tables([existing, new_rows])
             console.print(f"  {symbol}: merged {new_rows.num_rows} new rows with {existing.num_rows} existing")
-        elif extra_cols:
-            # Rewrite to fix stale schema even without new data
+        elif extra_cols or identity_changed:
+            # Rewrite stale schema/identity metadata even without new data.
             table = existing
-            console.print(f"  {symbol}: rewriting to fix schema ({', '.join(sorted(extra_cols))} dropped)")
+            console.print(f"  {symbol}: rewriting canonical metadata")
         else:
             console.print(f"  {symbol}: no new rows to add")
             return parquet_path
     
     # Sort by date
-    indices = pa.compute.sort_indices(table, sort_keys=[("trade_date", "ascending")])
+    indices = pc.sort_indices(table, sort_keys=[("trade_date", "ascending")])
     table = table.take(indices)
     
     _atomic_write_table(table, parquet_path)

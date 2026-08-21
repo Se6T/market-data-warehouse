@@ -14,3 +14,4 @@
 - When a user asks to turn a one-off strategy into a reusable module, default the design toward configurable universe inputs like presets, explicit ticker lists, and warehouse-discovered symbols instead of hard-wiring the first index used in the analysis.
 - When reporting quantitative research quality, do not present exploratory results as production-grade unless total-return validation, realistic costs, walk-forward/robustness checks, and baseline/null-model comparisons are actually implemented and reported.
 - Never run `rebuild_duckdb_from_parquet.py` sequentially for multiple non-futures asset classes: each invocation recreates the shared symbol/daily tables. Use the atomic all-universe rebuild so one asset refresh cannot erase the others.
+- Broker-preservation mode must batch source-identity verification rather than running Git verification once per preserved symbol, and public writers must canonicalize legacy IDs even when there are no new rows.

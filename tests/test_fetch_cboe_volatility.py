@@ -258,6 +258,27 @@ class TestWriteBronzeParquet:
         assert path2 == path
         assert path.stat().st_mtime == mtime_before
 
+    def test_rewrites_legacy_symbol_id_without_new_rows(self, tmp_path):
+        bars = [
+            {"date": "2025-01-02", "open": "10", "high": "11", "low": "9",
+             "close": "10.5", "volume": "100"},
+        ]
+        table = bars_to_table("VXHYG", bars)
+        path = write_bronze_parquet(table, "VXHYG", tmp_path)
+        existing = pq.ParquetFile(path).read().set_column(
+            1,
+            "symbol_id",
+            pa.array([123], type=pa.int64()),
+        )
+        pq.write_table(existing, path)
+
+        write_bronze_parquet(table, "VXHYG", tmp_path)
+
+        rewritten = pq.ParquetFile(path).read()
+        assert set(rewritten.column("symbol_id").to_pylist()) == {
+            _symbol_id("VXHYG")
+        }
+
     @pytest.mark.parametrize("failure", ["write", "fsync", "replace"])
     def test_atomic_publication_failure_preserves_predecessor_and_cleans_temp(
         self, tmp_path: Path, failure: str,
