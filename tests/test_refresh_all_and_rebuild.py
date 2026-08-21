@@ -298,6 +298,14 @@ def test_offline_public_refresh_accepts_one_session_cboe_publication_lag() -> No
     with pytest.raises(m0.RefreshFailure, match="expected latest session"):
         m0._validate_post_inventory([entry], [entry], date(2026, 8, 21))
 
+    friday = m0.replace(entry, latest_session="2026-08-21")
+    m0._validate_post_inventory(
+        [friday],
+        [friday],
+        date(2026, 8, 24),
+        refresh_broker_assets=False,
+    )
+
 
 def test_success_evidence_is_committed_with_bundle_before_external_audit_can_fail(
     tmp_path: Path,
