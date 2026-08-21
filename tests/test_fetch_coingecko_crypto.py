@@ -124,6 +124,20 @@ class TestCoinGeckoFetch:
         assert mock_get.call_count == 2
         mock_sleep.assert_called_once()
 
+    def test_coingecko_get_propagates_non_rate_limit_error(self):
+        response = MagicMock(status_code=500, headers={})
+        error = httpx.HTTPStatusError(
+            "server error",
+            request=httpx.Request("GET", "https://example.test/api/test"),
+            response=httpx.Response(500),
+        )
+        response.raise_for_status.side_effect = error
+        with patch("scripts.fetch_coingecko_crypto.httpx.get", return_value=response):
+            with pytest.raises(httpx.HTTPStatusError):
+                cg.coingecko_get(
+                    "/test", params={}, api_key=None, api_tier="demo"
+                )
+
     def test_fetch_ohlc_range(self):
         with patch("scripts.fetch_coingecko_crypto.coingecko_get", return_value=[[1, 2, 3, 4, 5]]) as mock_get:
             result = cg.fetch_ohlc_range(
@@ -153,6 +167,17 @@ class TestCoinGeckoFetch:
             )
         assert result == {"total_volumes": []}
         assert mock_get.call_args.args[0] == "/coins/bitcoin/market_chart/range"
+
+    def test_fetch_market_chart_daily(self):
+        with patch(
+            "scripts.fetch_coingecko_crypto.coingecko_get",
+            return_value={"prices": []},
+        ) as mock_get:
+            result = cg.fetch_market_chart_daily(
+                "bitcoin", vs_currency="usd", api_key=None, api_tier="demo"
+            )
+        assert result == {"prices": []}
+        assert mock_get.call_args.args[0] == "/coins/bitcoin/market_chart"
 
     def test_ohlcv_to_rows_joins_latest_volume_by_date(self):
         ohlc = [
@@ -260,6 +285,26 @@ class TestCoinGeckoFetch:
             },
         ]
         mock_chart.assert_called_once()
+
+    def test_fetch_coin_rows_propagates_unexpected_http_error(self):
+        error = httpx.HTTPStatusError(
+            "server error",
+            request=httpx.Request("GET", "https://example.test/ohlc/range"),
+            response=httpx.Response(500),
+        )
+        with patch(
+            "scripts.fetch_coingecko_crypto.fetch_ohlc_range", side_effect=error
+        ):
+            with pytest.raises(httpx.HTTPStatusError):
+                cg.fetch_coin_rows(
+                    cg.CoinRequest("bitcoin", "BTC"),
+                    vs_currency="usd",
+                    start=date(2025, 1, 2),
+                    end=date(2025, 1, 3),
+                    frequency="daily",
+                    api_key=None,
+                    api_tier="demo",
+                )
 
 
 class TestCliAndStorage:

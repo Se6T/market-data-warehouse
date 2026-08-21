@@ -1,42 +1,38 @@
-# Current Plan — CoinGecko Crypto Ingestion
+# Current Plan — Restore Atomic All-Universe Refresh
 
 ## Goal
-Build a CoinGecko historical OHLCV ingestion script that can fetch one or more crypto assets at a chosen frequency, write canonical bronze parquet in the same OHLCV column format used by the warehouse, and remain compatible with DuckDB rebuilds.
+Restore the hardened `refresh_all_and_rebuild.py` transaction expected by Portfolio Engine, preserve every bronze asset class in one immutable DuckDB generation, and prove the real public-data refresh works without scheduler or broker-account access.
 
 ## Dependency Graph
-- task-1-inspect-contract depends_on: []
-- task-2-extend-asset-class depends_on: [task-1-inspect-contract]
-- task-3-implement-fetch-script depends_on: [task-2-extend-asset-class]
-- task-4-add-tests depends_on: [task-3-implement-fetch-script]
-- task-5-run-verification depends_on: [task-4-add-tests]
+- task-1-restore-contract depends_on: []
+- task-2-adapt-current-sources depends_on: [task-1-restore-contract]
+- task-3-regression-tests depends_on: [task-2-adapt-current-sources]
+- task-4-real-refresh depends_on: [task-3-regression-tests]
+- task-5-cross-repo-verification depends_on: [task-4-real-refresh]
 
 ## Tasks
 
-### task-1-inspect-contract
+### task-1-restore-contract
 - depends_on: []
-- Confirm bronze parquet schema, DuckDB rebuild path, and existing ingestion script conventions.
+- Restore the last hardened atomic refresh implementation and its complete tests from repository history.
 - Status: done.
 
-### task-2-extend-asset-class
-- depends_on: [task-1-inspect-contract]
-- Add `crypto` as a bronze parquet asset class using the existing OHLCV schema.
-- Add DuckDB rebuild support for `asset_class=crypto` into `md.symbols`/`md.equities_daily` with venue `COINGECKO`.
+### task-2-adapt-current-sources
+- depends_on: [task-1-restore-contract]
+- Preserve existing equity/futures bronze without connecting to IB; refresh public volatility/crypto sources and rebuild all discovered classes together.
+- Status: done.
+
+### task-3-regression-tests
+- depends_on: [task-2-adapt-current-sources]
+- Prove sequential asset-class replacement cannot erase other partitions and missing optional futures does not fabricate data.
+- Status: done.
+
+### task-4-real-refresh
+- depends_on: [task-3-regression-tests]
+- Run the production command for 2026-08-21 and admit the immutable successor bundle.
 - Status: pending.
 
-### task-3-implement-fetch-script
-- depends_on: [task-2-extend-asset-class]
-- Add `scripts/fetch_coingecko_crypto.py`.
-- Support `--symbols`, `--coins`, `--preset`, `--frequency`, `--start`, `--end`, `--api-key`, `--warehouse`, and `--dry-run`.
-- Write canonical parquet to `~/market-warehouse/data-lake/bronze/asset_class=crypto/symbol=<SYMBOL>/data.parquet`.
-- Status: pending.
-
-### task-4-add-tests
-- depends_on: [task-3-implement-fetch-script]
-- Add unit tests with mocked HTTP responses and temp bronze dirs.
-- Verify argument parsing/helpers, CoinGecko row conversion, dry-run no-write behavior, and parquet writes.
-- Status: pending.
-
-### task-5-run-verification
-- depends_on: [task-4-add-tests]
-- Run focused tests and full coverage command if feasible.
+### task-5-cross-repo-verification
+- depends_on: [task-4-real-refresh]
+- Run MDW 100% coverage gates and Portfolio Engine full CI/build/installed-wheel/read-only admission gates.
 - Status: pending.

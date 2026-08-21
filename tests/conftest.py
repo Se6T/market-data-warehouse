@@ -9,6 +9,20 @@ from clients.bronze_client import BronzeClient
 from clients.db_client import DBClient
 
 
+@pytest.fixture(autouse=True)
+def block_accidental_real_ib_connections(request, monkeypatch):
+    """Fail closed when a test misses the runtime IB-client factory seam."""
+    if request.module.__name__ == "tests.test_ib_client":
+        return
+
+    def _fail_connect(*args, **kwargs):
+        pytest.fail(
+            "tests must mock the runtime IB client factory; real IB connections are forbidden"
+        )
+
+    monkeypatch.setattr("clients.ib_client.IBClient.connect", _fail_connect)
+
+
 # ── DuckDB fixtures ────────────────────────────────────────────────────
 
 BOOTSTRAP_SQL = """

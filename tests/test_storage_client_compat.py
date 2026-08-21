@@ -94,7 +94,9 @@ class TestDailyScriptCompat:
         monkeypatch.setattr("sys.argv", ["daily_update.py"])
         monkeypatch.setattr(daily_script, "DBClient", lambda **kwargs: storage)
         monkeypatch.setattr(daily_script, "is_trading_day", lambda d: True)
-        monkeypatch.setattr(daily_script, "IBClient", lambda: mock_ib)
+        monkeypatch.setattr(
+            daily_script, "create_ib_client_or_adapter", lambda **kwargs: mock_ib
+        )
         monkeypatch.setattr(daily_script, "DATA_LAKE", tmp_path)
         monkeypatch.setattr(daily_script, "date", SimpleNamespace(
             today=lambda: date(2025, 1, 3),

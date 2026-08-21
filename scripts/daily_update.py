@@ -79,23 +79,21 @@ def _fallback_client():
 
 # ── Config ─────────────────────────────────────────────────────────────
 
-DATA_LAKE = Path.home() / "market-warehouse" / "data-lake"
+DATA_LAKE = Path(os.getenv("MDW_WAREHOUSE", Path.home() / "market-warehouse")) / "data-lake"
 BRONZE_DIR = DATA_LAKE / "bronze" / "asset_class=equity"
 
 console = Console()
 
 
-ROOT_EXCHANGE_MAP: dict[str, str] = {
+ROOT_EXCHANGE_MAP = {
     "ES": "CME", "NQ": "CME", "RTY": "CME",
     "YM": "CBOT", "ZB": "CBOT", "ZN": "CBOT", "ZF": "CBOT",
     "CL": "NYMEX", "NG": "NYMEX",
     "GC": "COMEX", "SI": "COMEX",
 }
 
-# Symbols for which IBKR returns multiple active-looking SMART contracts.
-# Pin only after verifying the conId has current historical bars. WVE's former
-# Singapore-parent contract (212212833) was replaced by the Delaware parent on
-# 2026-08-10; unpinned qualification now resolves the current NASDAQ contract.
+# Contract overrides are intentionally empty after WVE's 2026 redomiciliation;
+# unpinned SMART qualification resolves its current NASDAQ contract.
 EQUITY_CONID_OVERRIDES: dict[str, int] = {}
 
 
@@ -569,7 +567,7 @@ def main():
     # ── Trading day check ───────────────────────────────────────────
     target = resolve_target_date(today, args.target_date, args.force)
     if target is None:
-        return
+        return 0
 
     asset_class = args.asset_class
     bronze_dir = DATA_LAKE / "bronze" / f"asset_class={asset_class}"
@@ -591,14 +589,14 @@ def main():
             console.print(
                 "[yellow]No tickers found in bronze parquet. Run fetch_ib_historical.py first.[/yellow]"
             )
-            return
+            return 1
 
         # Filter to preset tickers if specified
         if preset_tickers is not None:
             latest_dates = {k: v for k, v in latest_dates.items() if k in preset_tickers}
             if not latest_dates:
                 console.print("[yellow]No preset tickers found in bronze parquet.[/yellow]")
-                return
+                return 1
 
         up_to_date, single_gap, multi_gap = classify_gaps(latest_dates, target)
         need_update = single_gap + multi_gap
@@ -610,7 +608,7 @@ def main():
 
         if not need_update:
             console.print("\n[green bold]All tickers up to date.[/green bold]\n")
-            return
+            return 0
 
         if args.dry_run:
             console.print("\n[bold]Dry run — tickers needing update:[/bold]")
@@ -619,7 +617,7 @@ def main():
                 gap = trading_days_between(date.fromisoformat(latest), target)
                 console.print(f"  {ticker:6s}  latest={latest}  gap={gap} trading days")
             console.print(f"\n[yellow]Dry run complete. {len(need_update)} tickers need updating.[/yellow]\n")
-            return
+            return 0
 
         # ── Build fetch plan ────────────────────────────────────────
         tickers_with_durations: list[tuple[str, str]] = []
@@ -747,10 +745,12 @@ def main():
         console.print("\n[bold]Validation issues:[/bold]")
         for issue in total_issues[:20]:
             console.print(f"  [yellow]{issue}[/yellow]")
-        if len(total_issues) > 20:  # pragma: no cover
+        if len(total_issues) > 20:
             console.print(f"  ... and {len(total_issues) - 20} more")
     console.print()
+    return 1 if tickers_failed else 0
 
 
-if __name__ == "__main__":
-    main()
+from scripts._entrypoint import run_main
+
+run_main(__name__, main, exit_with_result=True)

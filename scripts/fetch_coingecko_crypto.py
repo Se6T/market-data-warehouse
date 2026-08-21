@@ -189,7 +189,7 @@ def coingecko_get(
             time.sleep(max(delay, 0.0))
             continue
         return response.json()
-    raise RuntimeError("CoinGecko retry loop exhausted")
+    raise RuntimeError("CoinGecko retry loop exhausted")  # pragma: no cover
 
 
 def fetch_ohlc_range(

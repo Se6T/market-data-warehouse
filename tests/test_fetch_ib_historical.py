@@ -764,6 +764,14 @@ def _mock_ib_instance(ticker_bars):
     return mock
 
 
+def _patch_ib_factory(mock_ib):
+    """Patch the construction seam used by the historical-fetch runtime."""
+    return patch(
+        "scripts.fetch_ib_historical.create_ib_client_or_adapter",
+        return_value=mock_ib,
+    )
+
+
 class TestMain:
     @pytest.mark.integration
     def test_main_end_to_end(self, tmp_path, monkeypatch):
@@ -781,7 +789,7 @@ class TestMain:
         cursor_dir = tmp_path / "cursors"
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=bronze_dir),
@@ -810,7 +818,7 @@ class TestMain:
         cursor_dir = tmp_path / "cursors"
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),
@@ -835,7 +843,7 @@ class TestMain:
         mock_ib = _mock_ib_instance({"AAPL": [_make_bar()]})
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),
@@ -869,7 +877,7 @@ class TestMain:
         cursor_dir = tmp_path / "cursors"
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),
@@ -914,7 +922,7 @@ class TestMain:
         })
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),
@@ -948,7 +956,7 @@ class TestMain:
         mock_ib = _mock_ib_instance({"AAPL": [_make_bar()]})
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),
@@ -981,7 +989,7 @@ class TestMain:
         mock_ib = _mock_ib_instance({})
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch("scripts.fetch_ib_historical.CURSOR_DIR", cursor_dir),
         ):
             main()  # Should return early without connecting
@@ -998,7 +1006,7 @@ class TestMain:
         mock_ib = _mock_ib_instance(bars)
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),
@@ -1029,7 +1037,7 @@ class TestMain:
         })
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),
@@ -1072,7 +1080,7 @@ class TestMain:
         mock_ib = _mock_ib_instance({"NVDA": [_make_bar()]})
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=bronze_dir),
@@ -1117,7 +1125,7 @@ class TestMain:
         })
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=bronze_dir),
@@ -1149,7 +1157,7 @@ class TestMain:
         mock_ib = _mock_ib_instance({})
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),
@@ -1188,7 +1196,7 @@ class TestMain:
         mock_ib = _mock_ib_instance({"AAPL": []})
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=bronze_dir),
@@ -1232,7 +1240,7 @@ class TestMain:
         mock_ib = _mock_ib_instance({})
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=bronze_dir),
@@ -1260,7 +1268,7 @@ class TestMain:
         vol_bronze_dir = tmp_path / "data-lake" / "bronze" / "asset_class=volatility"
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=kw.get("bronze_dir", vol_bronze_dir)),
@@ -1291,7 +1299,7 @@ class TestMain:
         mock_ib = _mock_ib_instance({"AAPL": [_make_bar()]})
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),
@@ -1316,7 +1324,7 @@ class TestMain:
         mock_ib = _mock_ib_instance({"AAPL": [_make_bar()]})
 
         with (
-            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            _patch_ib_factory(mock_ib),
             patch(
                 "scripts.fetch_ib_historical.BronzeClient",
                 lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),

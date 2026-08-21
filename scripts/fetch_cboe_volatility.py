@@ -9,8 +9,9 @@ Writes to bronze parquet in the standard warehouse format.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import os
+import uuid
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rich.console import Console
+
+from clients.symbol_ids import stable_symbol_id
 
 console = Console()
 
@@ -30,10 +33,32 @@ DEFAULT_PRESET = SCRIPT_DIR.parent / "presets" / "volatility.json"
 ASSET_CLASS = "volatility"
 
 
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_write_table(table: pa.Table, parquet_path: Path) -> None:
+    temporary = parquet_path.with_name(f".{parquet_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        pq.write_table(table, temporary)
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, parquet_path)
+        _fsync_directory(parquet_path.parent)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _symbol_id(symbol: str) -> int:
     """Generate a stable numeric ID from symbol string."""
-    h = hashlib.sha256(symbol.encode()).hexdigest()
-    return int(h[:14], 16)
+    return stable_symbol_id(symbol)
 
 
 def fetch_cboe_historical(symbol: str) -> list[dict[str, Any]]:
@@ -136,7 +161,7 @@ def write_bronze_parquet(
     indices = pa.compute.sort_indices(table, sort_keys=[("trade_date", "ascending")])
     table = table.take(indices)
     
-    pq.write_table(table, parquet_path)
+    _atomic_write_table(table, parquet_path)
     console.print(f"  {symbol}: wrote {table.num_rows} rows to {parquet_path}")
     return parquet_path
 
@@ -148,7 +173,7 @@ def load_preset(preset_path: Path) -> list[str]:
     return data.get("tickers", [])
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -167,6 +192,7 @@ def main() -> None:
         default=DEFAULT_WAREHOUSE,
         help=f"Warehouse directory (default: {DEFAULT_WAREHOUSE})",
     )
+    parser.add_argument("--end", type=date.fromisoformat)
     args = parser.parse_args()
     
     # Determine symbols to fetch
@@ -181,12 +207,20 @@ def main() -> None:
     
     console.print(f"\n[bold]Fetching CBOE volatility indices: {symbols}[/bold]\n")
     
+    failed = 0
     for symbol in symbols:
         try:
             bars = fetch_cboe_historical(symbol)
             if not bars:
                 console.print(f"  [yellow]{symbol}: no data returned[/yellow]")
+                failed += 1
                 continue
+            if args.end is not None:
+                bars = [bar for bar in bars if date.fromisoformat(bar["date"]) <= args.end]
+                if not bars:
+                    console.print(f"  [yellow]{symbol}: no data through {args.end}[/yellow]")
+                    failed += 1
+                    continue
             
             table = bars_to_table(symbol, bars)
             write_bronze_parquet(table, symbol, args.warehouse)
@@ -197,9 +231,12 @@ def main() -> None:
             
         except Exception as e:
             console.print(f"  [red]{symbol}: error - {e}[/red]")
+            failed += 1
     
     console.print("[bold green]Done.[/bold green]")
+    return 1 if failed else 0
 
 
-if __name__ == "__main__":
-    main()
+from scripts._entrypoint import run_main
+
+run_main(__name__, main, exit_with_result=True)
