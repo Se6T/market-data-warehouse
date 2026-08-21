@@ -247,7 +247,10 @@ def _write_immutable(path: Path, value: object) -> None:
 
 
 def discover_inventory(
-    bronze_root: Path, *, require_all_asset_classes: bool = True
+    bronze_root: Path,
+    *,
+    require_all_asset_classes: bool = True,
+    allow_legacy_volatility_ids: bool = False,
 ) -> list[InventoryEntry]:
     """Discover and validate every active canonical bronze parquet identity."""
     entries: list[InventoryEntry] = []
@@ -301,10 +304,16 @@ def discover_inventory(
             identity_id = int(next(iter(ids)))
             canonical_id = stable_symbol_id(symbol)
             if identity_id != canonical_id:
-                raise RefreshFailure(
-                    f"{asset_class}:{symbol} canonical identity ID mismatch: "
-                    f"expected {canonical_id}, observed {identity_id}"
-                )
+                legacy_id = int(hashlib.sha256(symbol.encode("utf-8")).hexdigest()[:14], 16)
+                if not (
+                    allow_legacy_volatility_ids
+                    and asset_class == "volatility"
+                    and identity_id == legacy_id
+                ):
+                    raise RefreshFailure(
+                        f"{asset_class}:{symbol} canonical identity ID mismatch: "
+                        f"expected {canonical_id}, observed {identity_id}"
+                    )
             previous_identity = seen_ids.get(canonical_id)
             if previous_identity is not None and previous_identity != (asset_class, symbol):
                 raise RefreshFailure(
@@ -1338,7 +1347,11 @@ def _refresh_all_and_rebuild_locked(
     bronze_root = config.warehouse / "data-lake" / "bronze"
     identity = source_identity(config.repo_root)
     audit["identity"] = dict(identity)
-    before = discover_inventory(bronze_root, require_all_asset_classes=False)
+    before = discover_inventory(
+        bronze_root,
+        require_all_asset_classes=False,
+        allow_legacy_volatility_ids=True,
+    )
     if not before:
         raise RefreshFailure("canonical bronze inventory is empty")
     audit["inventory"] = before

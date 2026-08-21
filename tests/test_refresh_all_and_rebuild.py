@@ -115,6 +115,28 @@ def test_discover_inventory_is_complete_canonical_and_content_bound(tmp_path: Pa
     assert inventory[0].path == "asset_class=crypto/symbol=BTC/data.parquet"
 
 
+def test_pre_refresh_inventory_accepts_only_legacy_volatility_ids(tmp_path: Path) -> None:
+    bronze = _warehouse(tmp_path) / "data-lake" / "bronze"
+    path = bronze / "asset_class=volatility" / "symbol=VIX" / "data.parquet"
+    table = pq.ParquetFile(path).read()
+    legacy_id = int(hashlib.sha256(b"VIX").hexdigest()[:14], 16)
+    table = table.set_column(
+        table.column_names.index("symbol_id"),
+        "symbol_id",
+        pa.array([legacy_id], type=pa.int64()),
+    )
+    pq.write_table(table, path)
+
+    with pytest.raises(m0.RefreshFailure, match="canonical identity ID mismatch"):
+        m0.discover_inventory(bronze)
+    inventory = m0.discover_inventory(
+        bronze,
+        allow_legacy_volatility_ids=True,
+    )
+    vix = next(item for item in inventory if item.symbol == "VIX")
+    assert vix.identity_id == stable_symbol_id("VIX")
+
+
 def test_dbclient_loads_all_asset_classes_without_erasure(tmp_path: Path) -> None:
     bronze = _warehouse(tmp_path) / "data-lake" / "bronze"
     with DBClient(tmp_path / "all.duckdb") as db:
