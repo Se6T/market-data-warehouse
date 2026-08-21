@@ -1,0 +1,26 @@
+{
+  "name": "multi_strat_relevant_equity_etfs_no_strc",
+  "description": "Focused IBKR equity/ETF universe for multi-strat-algo proposed strategies, excluding STRC because IB head timestamp fails and the full-inception fallback causes many historical request timeouts.",
+  "source": "/home/sebastian/projects/multi-strat-algo/docs/strategy_candidates.md and results/data_audit.json",
+  "tickers": [
+    "SGOV",
+    "BIL",
+    "SHV",
+    "BOXX",
+    "IBIT",
+    "ETHA",
+    "BITO",
+    "SVIX",
+    "SVXY",
+    "VIXY",
+    "VXX",
+    "JEPI",
+    "JEPQ",
+    "QYLD",
+    "XYLD",
+    "USMV",
+    "SPLV",
+    "DBC"
+  ],
+  "notes": "STRC is fetched separately with a limited lookback because IB returns no head timestamp for it. CBOE volatility indices such as VIX, VVIX, VXHYG are fetched separately via scripts/fetch_cboe_volatility.py. Crypto exchange OHLCV/funding is not covered by this IB preset."
+}

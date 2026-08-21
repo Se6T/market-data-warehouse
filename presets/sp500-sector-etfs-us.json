@@ -1,0 +1,5 @@
+{
+  "name": "sp500-sector-etfs-us",
+  "description": "S&P 500 SPDR sector ETFs (11)",
+  "tickers": ["XLB","XLE","XLF","XLI","XLK","XLP","XLU","XLV","XLY","XLRE","XLC"]
+}

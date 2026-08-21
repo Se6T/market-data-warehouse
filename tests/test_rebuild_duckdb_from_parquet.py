@@ -194,6 +194,35 @@ class TestRebuildDuckDBFromParquet:
             assert db.get_latest_dates() == {"AAPL": "2025-01-02"}
 
     @pytest.mark.integration
+    def test_asset_class_crypto(self, tmp_path, monkeypatch):
+        """--asset-class crypto uses COINGECKO venue and derives bronze dir."""
+        data_lake = tmp_path / "data-lake"
+        crypto_bronze = data_lake / "bronze" / "asset_class=crypto"
+        db_path = tmp_path / "rebuilt.duckdb"
+
+        with BronzeClient(bronze_dir=crypto_bronze, asset_class="crypto") as bronze:
+            btc_id = bronze.get_symbol_id("BTC")
+            bronze.replace_ticker_rows("BTC", [_row("2025-01-02", btc_id, 100000.0)])
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "rebuild_duckdb_from_parquet.py",
+                "--asset-class", "crypto",
+                "--db-path", str(db_path),
+            ],
+        )
+
+        with patch("scripts.rebuild_duckdb_from_parquet.DATA_LAKE", data_lake):
+            main()
+
+        with DBClient(db_path=db_path) as db:
+            symbols = db.query("SELECT * FROM md.symbols WHERE symbol = 'BTC'")
+            assert symbols[0]["asset_class"] == "crypto"
+            assert symbols[0]["venue"] == "COINGECKO"
+            assert db.get_latest_dates() == {"BTC": "2025-01-02"}
+
+    @pytest.mark.integration
     def test_asset_class_futures(self, tmp_path, monkeypatch):
         """--asset-class futures uses replace_futures_from_parquet."""
         data_lake = tmp_path / "data-lake"
