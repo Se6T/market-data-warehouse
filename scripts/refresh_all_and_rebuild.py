@@ -1530,7 +1530,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         db_path = db_path.parent / "current" / "market.duckdb"
     inventory_path = args.inventory_path
     if inventory_path is None:
-        inventory_path = args.manifest_path.parent.parent / "pre-refresh-inventory.json"
+        inventory_path = (
+            args.manifest_path.parent.parent
+            / "inventories"
+            / f"pre-refresh-{args.as_of.isoformat()}-{uuid.uuid4().hex}.json"
+        )
     config = RefreshConfig(
         warehouse=args.warehouse,
         db_path=db_path,
