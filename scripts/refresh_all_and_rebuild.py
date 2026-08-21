@@ -691,6 +691,16 @@ def _validate_post_inventory(
         if not refresh_broker_assets and current.asset_class in {"equity", "futures"}:
             continue
         expected = expected_latest_session(current.asset_class, as_of).isoformat()
+        if (
+            not refresh_broker_assets
+            and current.asset_class == "volatility"
+            and current.latest_session != expected
+        ):
+            prior = date.fromisoformat(expected) - timedelta(days=1)
+            while not is_trading_day(prior):
+                prior -= timedelta(days=1)
+            if current.latest_session == prior.isoformat():
+                continue
         if current.latest_session != expected:
             label = f"{identity[0]}:{identity[1]}"
             raise RefreshFailure(
