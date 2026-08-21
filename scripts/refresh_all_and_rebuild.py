@@ -1071,6 +1071,18 @@ def _atomic_publish_bundle(
                 committed_marker_temp.unlink()
         except BaseException:
             pass
+        if marker_transition_started:
+            # Recovery may itself fault after the committed marker and promoted
+            # pointer became the coherent reader-visible state.  Reconcile the
+            # API outcome with the production resolver before reporting a
+            # failure: otherwise the caller would emit failed terminal evidence
+            # for the succeeded generation every fresh reader already admits.
+            try:
+                if resolve_current_bundle(db_path, manifest_path).root == generation.resolve():
+                    committed = True
+                    return
+            except BaseException:
+                pass
         if not pointer.is_symlink() or pointer.resolve(strict=False) != generation:
             shutil.rmtree(generation, ignore_errors=True)
         raise

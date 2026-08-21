@@ -206,6 +206,100 @@ def test_success_evidence_is_committed_with_bundle_before_external_audit_can_fai
     ] * 4
 
 
+def test_reader_visible_success_suppresses_failure_audit_under_compound_faults(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, _warehouse(tmp_path))
+    old = _seed_old_db(config)
+    real_replace, real_fsync = os.replace, m0._fsync_directory
+    replacements = parent_fsyncs = 0
+
+    def replace(source, destination) -> None:
+        nonlocal replacements
+        replacements += 1
+        if replacements == 3:
+            raise OSError("pending marker restoration failed")
+        if replacements == 4:
+            raise OSError("pointer rollback failed")
+        real_replace(source, destination)
+
+    def fsync(path: Path) -> None:
+        nonlocal parent_fsyncs
+        if path == config.db_path.parent.parent:
+            parent_fsyncs += 1
+            if parent_fsyncs == 3:
+                raise OSError("committed marker fsync failed")
+        real_fsync(path)
+
+    with patch.object(m0.os, "replace", side_effect=replace), patch.object(
+        m0, "_fsync_directory", side_effect=fsync,
+    ), patch.object(
+        m0, "_write_run_result", side_effect=OSError("failure audit fsync failed"),
+    ) as writer:
+        manifest = m0.refresh_all_and_rebuild(
+            config, command_runner=_runner([]), source_identity=_identity,
+        )
+
+    writer.assert_not_called()
+    assert config.db_path.read_bytes() != old
+    committed = json.loads(m0.resolve_current_bundle(
+        config.db_path, config.manifest_path,
+    ).manifest.read_text())
+    assert committed == manifest
+    assert committed["run_result"]["outcome"] == "succeeded"
+
+
+def test_reported_persistent_fsync_failure_keeps_reader_on_predecessor(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, _warehouse(tmp_path))
+    old = _seed_old_db(config)
+    publication_failure = OSError("persistent publication fsync failure")
+    audit_failure = OSError("failure audit fsync failed")
+    real_replace, real_fsync = os.replace, m0._fsync_directory
+    real_resolve = m0.resolve_current_bundle
+    replacements = parent_fsyncs = resolutions = 0
+
+    def replace(source, destination) -> None:
+        nonlocal replacements
+        replacements += 1
+        if replacements == 4:
+            raise OSError("pointer rollback failed")
+        real_replace(source, destination)
+
+    def fsync(path: Path) -> None:
+        nonlocal parent_fsyncs
+        if path == config.db_path.parent.parent:
+            parent_fsyncs += 1
+            if parent_fsyncs >= 3:
+                raise publication_failure
+        real_fsync(path)
+
+    def resolve(db_path: Path, manifest_path: Path) -> m0.PublishedBundle:
+        nonlocal resolutions
+        resolutions += 1
+        if resolutions == 2:
+            raise OSError("reconciliation read failed")
+        return real_resolve(db_path, manifest_path)
+
+    with patch.object(m0.os, "replace", side_effect=replace), patch.object(
+        m0, "_fsync_directory", side_effect=fsync,
+    ), patch.object(
+        m0, "resolve_current_bundle", side_effect=resolve,
+    ), patch.object(m0, "_write_run_result", side_effect=audit_failure), pytest.raises(
+        OSError, match="persistent publication fsync failure",
+    ) as raised:
+        m0.refresh_all_and_rebuild(
+            config, command_runner=_runner([]), source_identity=_identity,
+        )
+
+    assert raised.value is publication_failure
+    assert raised.value.__cause__ is audit_failure
+    visible = m0.resolve_current_bundle(config.db_path, config.manifest_path)
+    assert visible.database.read_bytes() == old
+    assert json.loads(visible.manifest.read_text())["generation"] == "old"
+
+
 def test_failure_evidence_fault_preserves_original_error_and_chains_audit_fault(
     tmp_path: Path,
 ) -> None:
@@ -1225,7 +1319,7 @@ def test_post_commit_marker_cleanup_faults_leave_reader_recognized_success(
     assert m0.resolve_current_bundle(db_path, manifest_path).database.read_bytes() == b"new-db"
 
 
-def test_marker_commit_failure_with_rollback_fault_never_reports_success(
+def test_compound_commit_fault_returns_success_when_fresh_reader_admits_successor(
     tmp_path: Path,
 ) -> None:
     current = tmp_path / "published" / "current"
@@ -1259,11 +1353,15 @@ def test_marker_commit_failure_with_rollback_fault_never_reports_success(
 
     with patch.object(m0.os, "replace", side_effect=replace), patch.object(
         m0, "_fsync_directory", side_effect=fsync,
-    ), pytest.raises(OSError, match="marker commit fsync failed"):
+    ):
         m0._atomic_publish_bundle(candidate, db_path, manifest_path, {
             "generation": "new",
             "database_sha256": hashlib.sha256(b"new-db").hexdigest(),
         })
+
+    visible = m0.resolve_current_bundle(db_path, manifest_path)
+    assert visible.database.read_bytes() == b"new-db"
+    assert json.loads(visible.manifest.read_text())["generation"] == "new"
 
 
 def test_post_replace_validation_and_failed_rollback_leave_durable_reader_guard(tmp_path: Path) -> None:
