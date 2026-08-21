@@ -30,9 +30,9 @@ Restore the hardened `refresh_all_and_rebuild.py` transaction expected by Portfo
 ### task-4-real-refresh
 - depends_on: [task-3-regression-tests]
 - Run the production command for 2026-08-21 and admit the immutable successor bundle.
-- Status: pending.
+- Status: done. Published generation `c72d8f3462ed491b8204e48a2f55b6d4` from commit `7eca0022ff43a71cf828b397d4715fd477cea5c1`.
 
 ### task-5-cross-repo-verification
 - depends_on: [task-4-real-refresh]
 - Run MDW 100% coverage gates and Portfolio Engine full CI/build/installed-wheel/read-only admission gates.
-- Status: pending.
+- Status: done. MDW CI, Portfolio Engine CI, the 1,688-test local suite, and real read-only bundle admission passed.
