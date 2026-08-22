@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 import duckdb
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +34,10 @@ if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover - standalone script pa
 from clients.db_client import DBClient  # noqa: E402
 from clients.symbol_ids import stable_symbol_id  # noqa: E402
 from scripts.daily_update import is_trading_day  # noqa: E402
+from scripts._refresh_result import (  # noqa: E402
+    MAX_RESULT_BYTES as MAX_OWNER_RESULT_BYTES,
+    MAX_SYMBOLS as MAX_OWNER_SYMBOLS,
+)
 
 ASSET_CLASSES = ("crypto", "equity", "futures", "volatility")
 VENUES = {"crypto": "BINANCE", "equity": "SMART", "volatility": "CBOE"}
@@ -130,6 +136,10 @@ class RefreshConfig:
     command_timeout: int = 3600
     source_archive_fd: int | None = None
     refresh_broker_assets: bool = True
+    bootstrap_current_vxm: bool = True
+    vxm_roll_days: int = 5
+    vxm_host: str = "127.0.0.1"
+    vxm_port: int = 4002
 
 
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
@@ -205,6 +215,14 @@ def _path_identity(path: Path) -> tuple[int, int] | None:
 def _validate_config(config: RefreshConfig) -> None:
     if type(config.refresh_broker_assets) is not bool:
         raise RefreshFailure("refresh_broker_assets must be an exact bool")
+    if type(config.bootstrap_current_vxm) is not bool:
+        raise RefreshFailure("bootstrap_current_vxm must be an exact bool")
+    if type(config.vxm_roll_days) is not int or config.vxm_roll_days < 0:
+        raise RefreshFailure("vxm_roll_days must be a non-negative integer")
+    if type(config.vxm_host) is not str or not config.vxm_host:
+        raise RefreshFailure("vxm_host must be non-empty")
+    if type(config.vxm_port) is not int or config.vxm_port != 4002:
+        raise RefreshFailure("dynamic VXM owner requires PAPER port 4002")
     paths = (config.db_path, config.manifest_path, config.inventory_path)
     lexical = {os.path.abspath(path) for path in paths}
     if len(lexical) != 3:
@@ -518,45 +536,7 @@ def _verify_source_identity(
         raise RefreshFailure("source identity changed during M0 refresh")
 
 
-def _update_argv(config: RefreshConfig, entry: InventoryEntry, preset: Path) -> list[str]:
-    python = str(config.python)
-    if entry.asset_class in {"equity", "futures"}:
-        if entry.asset_class == "futures":
-            root, expiry = entry.symbol.rsplit("_", 1)
-            preset_document = {
-                "name": f"m0-{entry.asset_class}-{entry.symbol}",
-                "contracts": [{"root": root, "expiry": expiry}],
-            }
-        else:
-            preset_document = {
-                "name": f"m0-{entry.asset_class}-{entry.symbol}",
-                "tickers": [entry.symbol],
-            }
-        preset.write_bytes(_canonical_bytes(preset_document))
-        owner_argv = [
-            python,
-            str(config.repo_root / "scripts" / "daily_update.py"),
-            "--asset-class", entry.asset_class,
-            "--target-date", config.as_of.isoformat(),
-            "--force",
-            "--preset", str(preset),
-        ]
-    elif entry.asset_class == "volatility":
-        owner_argv = [
-            python,
-            str(config.repo_root / "scripts" / "fetch_cboe_volatility.py"),
-            "--symbols", entry.symbol,
-            "--end", config.as_of.isoformat(),
-            "--warehouse", str(config.warehouse),
-        ]
-    else:
-        owner_argv = [
-            python,
-            str(config.repo_root / "scripts" / "fetch_binance_crypto.py"),
-            "--symbols", entry.symbol,
-            "--end", config.as_of.isoformat(),
-            "--warehouse", str(config.warehouse),
-        ]
+def _seal_owner_argv(config: RefreshConfig, owner_argv: list[str]) -> list[str]:
     if config.source_archive_fd is None:
         return owner_argv
     script = Path(owner_argv[1]).relative_to(config.repo_root).as_posix()
@@ -573,7 +553,222 @@ def _update_argv(config: RefreshConfig, entry: InventoryEntry, preset: Path) -> 
         "g={'__name__':'__main__','__file__':s,'__package__':None,'__cached__':None};"
         "exec(compile(zipfile.ZipFile(a).read(s),s,'exec'),g)"
     )
-    return [python, "-I", "-S", "-c", bootstrap, archive, script, *owner_argv[2:]]
+    return [str(config.python), "-I", "-S", "-c", bootstrap, archive, script, *owner_argv[2:]]
+
+
+def _update_argv(
+    config: RefreshConfig,
+    entries: Sequence[InventoryEntry],
+    preset: Path,
+    result_json: Path,
+) -> list[str]:
+    if not entries:
+        raise RefreshFailure("cannot build owner argv for an empty asset class")
+    asset_class = entries[0].asset_class
+    if any(entry.asset_class != asset_class for entry in entries):
+        raise RefreshFailure("owner argv asset class mismatch")
+    symbols = [entry.symbol for entry in entries]
+    python = str(config.python)
+    if asset_class in {"equity", "futures"}:
+        if asset_class == "futures":
+            preset_document = {
+                "name": "m0-futures-batch",
+                "contracts": [
+                    {"root": symbol.rsplit("_", 1)[0], "expiry": symbol.rsplit("_", 1)[1]}
+                    for symbol in symbols
+                ],
+            }
+        else:
+            preset_document = {
+                "name": "m0-equity-batch",
+                "tickers": symbols,
+            }
+        preset.write_bytes(_canonical_bytes(preset_document))
+        owner_argv = [
+            python,
+            str(config.repo_root / "scripts" / "daily_update.py"),
+            "--asset-class", asset_class,
+            "--target-date", config.as_of.isoformat(),
+            "--force",
+            "--preset", str(preset),
+        ]
+    elif asset_class == "volatility":
+        owner_argv = [
+            python,
+            str(config.repo_root / "scripts" / "fetch_cboe_volatility.py"),
+            "--symbols", *symbols,
+            "--end", config.as_of.isoformat(),
+            "--warehouse", str(config.warehouse),
+        ]
+    else:
+        owner_argv = [
+            python,
+            str(config.repo_root / "scripts" / "fetch_binance_crypto.py"),
+            "--symbols", *symbols,
+            "--end", config.as_of.isoformat(),
+            "--warehouse", str(config.warehouse),
+        ]
+    owner_argv.extend(["--result-json", str(result_json)])
+    return _seal_owner_argv(config, owner_argv)
+
+
+def _read_owner_result(
+    path: Path, asset_class: str, requested_symbols: Sequence[str],
+) -> dict[str, str]:
+    """Validate and return exact bounded per-symbol owner statuses."""
+    message = f"{asset_class} owner result is invalid"
+    try:
+        symbols = list(requested_symbols)
+        if (
+            not symbols
+            or len(symbols) > MAX_OWNER_SYMBOLS
+            or any(type(symbol) is not str or not symbol for symbol in symbols)
+            or len(symbols) != len(set(symbols))
+            or path.is_symlink()
+        ):
+            raise ValueError
+        metadata = path.stat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_OWNER_RESULT_BYTES:
+            raise ValueError
+        raw = path.read_bytes()
+        if len(raw) > MAX_OWNER_RESULT_BYTES:
+            raise ValueError
+        document = json.loads(raw)
+        if type(document) is not dict or set(document) != {
+            "schema_version", "asset_class", "requested_symbols", "results"
+        }:
+            raise ValueError
+        if document["schema_version"] != 1 or type(document["schema_version"]) is not int:
+            raise ValueError
+        if document["asset_class"] != asset_class or type(document["asset_class"]) is not str:
+            raise ValueError
+        reported_symbols = document["requested_symbols"]
+        results = document["results"]
+        if (
+            type(reported_symbols) is not list
+            or reported_symbols != symbols
+            or len(reported_symbols) != len(set(reported_symbols))
+            or type(results) is not list
+            or len(results) != len(symbols)
+        ):
+            raise ValueError
+        statuses: dict[str, str] = {}
+        for item in results:
+            if type(item) is not dict or set(item) != {"symbol", "status"}:
+                raise ValueError
+            symbol, status = item["symbol"], item["status"]
+            if (
+                type(symbol) is not str
+                or symbol in statuses
+                or type(status) is not str
+                or status not in {"succeeded", "failed"}
+            ):
+                raise ValueError
+            statuses[symbol] = status
+        if list(statuses) != symbols:
+            raise ValueError
+        return statuses
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise RefreshFailure(message) from exc
+
+
+def _vxm_owner_argv(
+    config: RefreshConfig, result_json: Path, mapping_json: Path,
+) -> list[str]:
+    owner_argv = [
+        str(config.python),
+        str(config.repo_root / "scripts" / "fetch_vxm_current.py"),
+        "--warehouse", str(config.warehouse),
+        "--as-of", config.as_of.isoformat(),
+        "--result-json", str(result_json),
+        "--mapping-json", str(mapping_json),
+        "--roll-days", str(config.vxm_roll_days),
+        "--host", config.vxm_host,
+        "--port", str(config.vxm_port),
+    ]
+    return _seal_owner_argv(config, owner_argv)
+
+
+def _read_vxm_mapping(path: Path, config: RefreshConfig) -> dict[str, object]:
+    message = "dynamic VXM owner mapping is invalid"
+    expected_keys = {
+        "schema_version", "root", "symbol", "contract_id", "con_id", "local_symbol",
+        "sec_type", "exchange", "currency", "trading_class", "multiplier",
+        "expiry_date", "as_of", "roll_days", "latest_session",
+    }
+    try:
+        if path.is_symlink() or path.stat().st_size > MAX_OWNER_RESULT_BYTES:
+            raise ValueError
+        document = json.loads(path.read_bytes())
+        if type(document) is not dict or set(document) != expected_keys:
+            raise ValueError
+        symbol = document["symbol"]
+        expiry = date.fromisoformat(document["expiry_date"])
+        if (
+            document["schema_version"] != 1
+            or type(document["schema_version"]) is not int
+            or document["root"] != "VXM"
+            or type(symbol) is not str
+            or symbol != f"VXM_{expiry:%Y%m%d}"
+            or document["contract_id"] != stable_symbol_id(symbol)
+            or type(document["contract_id"]) is not int
+            or type(document["con_id"]) is not int
+            or document["con_id"] <= 0
+            or type(document["local_symbol"]) is not str
+            or not document["local_symbol"].startswith("VXM")
+            or document["sec_type"] != "FUT"
+            or document["exchange"] != "CFE"
+            or document["currency"] != "USD"
+            or document["trading_class"] != "VXM"
+            or document["multiplier"] != "100"
+            or document["as_of"] != config.as_of.isoformat()
+            or document["roll_days"] != config.vxm_roll_days
+            or document["latest_session"] != expected_latest_session(
+                "futures", config.as_of
+            ).isoformat()
+            or expiry <= config.as_of + timedelta(days=config.vxm_roll_days)
+        ):
+            raise ValueError
+        return document
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise RefreshFailure(message) from exc
+
+
+def _bootstrap_current_vxm(
+    config: RefreshConfig,
+    command_runner: CommandRunner,
+    scratch: Path,
+    verify_source: Callable[[], None],
+) -> tuple[dict[str, object], dict[str, object]]:
+    result_path = scratch / "vxm-owner-result.json"
+    mapping_path = scratch / "vxm-contract-mapping.json"
+    verify_source()
+    started = _utc_now()
+    argv = _vxm_owner_argv(config, result_path, mapping_path)
+    argv_sha256 = hashlib.sha256(_canonical_bytes(argv)).hexdigest()
+    try:
+        result = command_runner(argv)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RefreshFailure("dynamic VXM owner transport failed") from exc
+    if result.args != argv:
+        raise RefreshFailure("dynamic VXM owner argv mismatch")
+    if int(result.returncode) != 0:
+        raise RefreshFailure("dynamic VXM owner failed")
+    mapping = _read_vxm_mapping(mapping_path, config)
+    symbol = str(mapping["symbol"])
+    statuses = _read_owner_result(result_path, "futures", [symbol])
+    if statuses != {symbol: "succeeded"}:
+        raise RefreshFailure("dynamic VXM owner result is invalid")
+    verify_source()
+    return mapping, {
+        "asset_class": "futures",
+        "symbol": symbol,
+        "argv_sha256": argv_sha256,
+        "started_at": started,
+        "ended_at": _utc_now(),
+        "exit_code": 0,
+        "status": "succeeded",
+    }
 
 
 def _default_runner(config: RefreshConfig) -> CommandRunner:
@@ -612,60 +807,78 @@ def _refresh_inventory(
     if steps is None:
         steps = []
     preservation_since_verification = False
-    for ordinal, entry in enumerate(inventory):
-        if not config.refresh_broker_assets and entry.asset_class in {"equity", "futures"}:
+    unsafe_failures: list[str] = []
+    grouped = [
+        (asset_class, [entry for entry in inventory if entry.asset_class == asset_class])
+        for asset_class in ASSET_CLASSES
+    ]
+    for ordinal, (asset_class, entries) in enumerate(grouped):
+        if not entries:
+            continue
+        if not config.refresh_broker_assets and asset_class in {"equity", "futures"}:
             timestamp = _utc_now()
-            steps.append({
-                "asset_class": entry.asset_class,
-                "symbol": entry.symbol,
-                "argv_sha256": None,
-                "started_at": timestamp,
-                "ended_at": timestamp,
-                "exit_code": None,
-                "status": "preserved",
-            })
+            for entry in entries:
+                steps.append({
+                    "asset_class": entry.asset_class,
+                    "symbol": entry.symbol,
+                    "argv_sha256": None,
+                    "started_at": timestamp,
+                    "ended_at": timestamp,
+                    "exit_code": None,
+                    "status": "preserved",
+                })
             preservation_since_verification = True
             continue
         verify_source()
         preservation_since_verification = False
-        argv = _update_argv(config, entry, scratch / f"preset-{ordinal}.json")
         started = _utc_now()
+        argv_sha256: str | None = None
+        exit_code: int | None = None
+        statuses = {entry.symbol: "failed" for entry in entries}
+        result_path = scratch / f"owner-result-{ordinal}-{asset_class}.json"
         try:
+            argv = _update_argv(
+                config, entries, scratch / f"preset-{ordinal}.json", result_path,
+            )
+            argv_sha256 = hashlib.sha256(_canonical_bytes(argv)).hexdigest()
             result = command_runner(argv)
-        except BaseException:
+            argv_matches = result.args == argv
+            exit_code = int(result.returncode)
+            statuses = _read_owner_result(
+                result_path, asset_class, [entry.symbol for entry in entries],
+            )
+            expected_exit_success = all(status == "succeeded" for status in statuses.values())
+            if (exit_code == 0) != expected_exit_success:
+                raise RefreshFailure(f"{asset_class} owner result exit status mismatch")
+            if not argv_matches:
+                raise RefreshFailure(f"{asset_class} owner reported argv mismatch")
+        except (OSError, subprocess.TimeoutExpired):
+            # A transport-level owner failure provides class-level terminal evidence.
+            # Every identity in this batch remains failed; post-refresh integrity
+            # validation decides whether unchanged predecessor data may publish degraded.
+            pass
+        except Exception as exc:
+            unsafe_failures.append(
+                str(exc)
+                if isinstance(exc, RefreshFailure)
+                else f"{asset_class} owner result unavailable"
+            )
+        ended = _utc_now()
+        for entry in entries:
             steps.append({
                 "asset_class": entry.asset_class,
                 "symbol": entry.symbol,
-                "argv_sha256": hashlib.sha256(_canonical_bytes(argv)).hexdigest(),
+                "argv_sha256": argv_sha256,
                 "started_at": started,
-                "ended_at": _utc_now(),
-                "exit_code": None,
-                "status": "failed",
+                "ended_at": ended,
+                "exit_code": exit_code,
+                "status": statuses[entry.symbol],
             })
-            raise
-        ended = _utc_now()
-        argv_matches = result.args == argv
-        step = {
-            "asset_class": entry.asset_class,
-            "symbol": entry.symbol,
-            "argv_sha256": hashlib.sha256(_canonical_bytes(argv)).hexdigest(),
-            "started_at": started,
-            "ended_at": ended,
-            "exit_code": int(result.returncode),
-            "status": "succeeded" if result.returncode == 0 and argv_matches else "failed",
-        }
-        steps.append(step)
         verify_source()
-        if not argv_matches:
-            raise RefreshFailure(
-                f"{entry.asset_class}:{entry.symbol} owner reported argv mismatch"
-            )
-        if result.returncode != 0:
-            raise RefreshFailure(
-                f"{entry.asset_class}:{entry.symbol} update failed with exit {result.returncode}"
-            )
     if preservation_since_verification:
         verify_source()
+    if unsafe_failures:
+        raise RefreshFailure(unsafe_failures[0])
     return steps
 
 
@@ -675,19 +888,26 @@ def _validate_post_inventory(
     as_of: date,
     *,
     refresh_broker_assets: bool = True,
+    failed_identities: Sequence[tuple[str, str]] = (),
 ) -> None:
     before_map = {(entry.asset_class, entry.symbol): entry for entry in before}
     after_map = {(entry.asset_class, entry.symbol): entry for entry in after}
+    failed = set(failed_identities)
     if set(before_map) != set(after_map):
         raise RefreshFailure("inventory identities changed during refresh")
     for identity, current in after_map.items():
         previous = before_map[identity]
+        label = f"{identity[0]}:{identity[1]}"
+        if current.rows < previous.rows:
+            raise RefreshFailure(f"{label} row count regressed")
         if current.latest_session < previous.latest_session:
-            label = f"{identity[0]}:{identity[1]}"
             raise RefreshFailure(f"{label} latest session regressed")
         if current.latest_session > as_of.isoformat():
-            label = f"{identity[0]}:{identity[1]}"
             raise RefreshFailure(f"{label} latest session exceeds requested as-of")
+        if identity in failed:
+            if current.sha256 != previous.sha256:
+                raise RefreshFailure(f"{label} failed identity changed from predecessor")
+            continue
         if not refresh_broker_assets and current.asset_class in {"equity", "futures"}:
             continue
         expected = expected_latest_session(current.asset_class, as_of).isoformat()
@@ -702,7 +922,6 @@ def _validate_post_inventory(
             if current.latest_session == prior.isoformat():
                 continue
         if current.latest_session != expected:
-            label = f"{identity[0]}:{identity[1]}"
             raise RefreshFailure(
                 f"{label} expected latest session {expected}, observed {current.latest_session}"
             )
@@ -810,29 +1029,28 @@ def validate_database(temp_db: Path, inventory: Sequence[InventoryEntry]) -> dic
         }
         if actual_symbol_ids != expected_symbol_ids:
             raise RefreshFailure("database canonical ID mismatch for symbol inventory")
-        futures = set(
+        actual_futures = set(
             connection.execute(
-                "SELECT DISTINCT root_symbol || '_' || strftime(expiry_date, '%Y%m') "
-                "FROM md.futures_daily"
+                "SELECT DISTINCT root_symbol, expiry_date, contract_id FROM md.futures_daily"
             ).fetchall()
         )
-        expected_futures = {
-            (entry.symbol,) for entry in inventory if entry.asset_class == "futures"
-        }
-        if futures != expected_futures:
-            raise RefreshFailure("database futures inventory mismatch")
-        actual_futures_ids = set(
-            connection.execute(
-                "SELECT DISTINCT root_symbol || '_' || strftime(expiry_date, '%Y%m'), "
-                "contract_id FROM md.futures_daily"
-            ).fetchall()
-        )
-        expected_futures_ids = {
-            (entry.symbol, entry.identity_id)
-            for entry in inventory if entry.asset_class == "futures"
-        }
-        if actual_futures_ids != expected_futures_ids:
-            raise RefreshFailure("database canonical ID mismatch for futures inventory")
+        expected_futures = set()
+        for entry in inventory:
+            if entry.asset_class != "futures":
+                continue
+            root, suffix = entry.symbol.rsplit("_", 1)
+            if re.fullmatch(r"\d{8}", suffix):
+                expiry = date.fromisoformat(f"{suffix[:4]}-{suffix[4:6]}-{suffix[6:8]}")
+            elif re.fullmatch(r"\d{6}", suffix):
+                expiry = date.fromisoformat(f"{suffix[:4]}-{suffix[4:6]}-01")
+            else:
+                raise RefreshFailure("database futures inventory has invalid identity")
+            expected_futures.add((root, expiry, entry.identity_id))
+        if actual_futures != expected_futures:
+            raise RefreshFailure(
+                "database futures inventory mismatch or canonical ID mismatch: "
+                f"expected={sorted(expected_futures)} actual={sorted(actual_futures)}"
+            )
         actual_per_identity = {
             (asset_class, symbol): (rows, latest.isoformat() if latest is not None else None)
             for asset_class, symbol, rows, latest in connection.execute(
@@ -845,12 +1063,27 @@ def validate_database(temp_db: Path, inventory: Sequence[InventoryEntry]) -> dic
             (entry.asset_class, entry.symbol): (entry.rows, entry.latest_session)
             for entry in expected_symbol_entries
         }
+        futures_identity_by_contract = {
+            (root, expiry): entry.symbol
+            for entry in inventory
+            if entry.asset_class == "futures"
+            for root, suffix in [entry.symbol.rsplit("_", 1)]
+            for expiry in [
+                date.fromisoformat(
+                    f"{suffix[:4]}-{suffix[4:6]}-"
+                    f"{suffix[6:8] if len(suffix) == 8 else '01'}"
+                )
+            ]
+        }
         actual_per_identity.update({
-            ("futures", symbol): (rows, latest.isoformat())
-            for symbol, rows, latest in connection.execute(
-                "SELECT root_symbol || '_' || strftime(expiry_date, '%Y%m'), count(*), "
-                "max(trade_date) FROM md.futures_daily GROUP BY 1"
+            ("futures", futures_identity_by_contract[(root, expiry)]): (
+                rows, latest.isoformat()
+            )
+            for root, expiry, rows, latest in connection.execute(
+                "SELECT root_symbol, expiry_date, count(*), max(trade_date) "
+                "FROM md.futures_daily GROUP BY 1, 2"
             ).fetchall()
+            if (root, expiry) in futures_identity_by_contract
         })
         expected_per_identity.update({
             (entry.asset_class, entry.symbol): (entry.rows, entry.latest_session)
@@ -1322,6 +1555,21 @@ def _terminal_steps(
     return terminal
 
 
+def _failed_identity_statuses(
+    steps: Sequence[Mapping[str, object]],
+) -> list[dict[str, str]]:
+    """Return the non-sensitive failed identity evidence in canonical order."""
+    return [
+        {
+            "asset_class": str(step["asset_class"]),
+            "symbol": str(step["symbol"]),
+            "status": "failed",
+        }
+        for step in steps
+        if step.get("status") == "failed"
+    ]
+
+
 def _run_result_document(
     config: RefreshConfig,
     *,
@@ -1340,16 +1588,23 @@ def _run_result_document(
     raw_steps = audit.get("steps", [])
     steps = raw_steps if isinstance(raw_steps, list) else []
     identity = audit.get("identity")
+    terminal_steps = _terminal_steps(inventory, steps)
+    failed_identities = _failed_identity_statuses(terminal_steps)
     return {
         "run_id": run_id,
         "requested_as_of": config.as_of.isoformat(),
         "started_at": started_at,
         "ended_at": _utc_now(),
-        "outcome": "failed" if failure is not None else "succeeded",
+        "outcome": (
+            "failed" if failure is not None
+            else "degraded" if failed_identities
+            else "succeeded"
+        ),
         "failure_type": type(failure).__name__ if failure is not None else None,
         "source_identity": dict(identity) if isinstance(identity, Mapping) else None,
         "inventory_path": str(config.inventory_path),
-        "steps": _terminal_steps(inventory, steps),
+        "steps": terminal_steps,
+        "failed_identities": failed_identities,
     }
 
 
@@ -1368,6 +1623,10 @@ def _refresh_all_and_rebuild_locked(
     bronze_root = config.warehouse / "data-lake" / "bronze"
     identity = source_identity(config.repo_root)
     audit["identity"] = dict(identity)
+    steps: list[dict[str, object]] = []
+    audit["steps"] = steps
+    current_futures_contracts: dict[str, dict[str, object]] = {}
+    bootstrap_unsafe_mutation = False
     before = discover_inventory(
         bronze_root,
         require_all_asset_classes=False,
@@ -1375,6 +1634,102 @@ def _refresh_all_and_rebuild_locked(
     )
     if not before:
         raise RefreshFailure("canonical bronze inventory is empty")
+    if config.bootstrap_current_vxm and config.refresh_broker_assets:
+        prior_vxm = tuple(
+            entry
+            for entry in before
+            if entry.asset_class == "futures" and entry.symbol.startswith("VXM_")
+        )
+        with tempfile.TemporaryDirectory(prefix="mdw-vxm-bootstrap-") as bootstrap_name:
+            with _sealed_execution_source(config.repo_root, identity) as sealed_source:
+                execution_config = replace(
+                    config, source_archive_fd=sealed_source.fileno(),
+                )
+                runner = command_runner or _default_runner(execution_config)
+                verify_source = lambda: _verify_source_identity(
+                    config.repo_root, identity, source_identity
+                )
+                try:
+                    mapping, step = _bootstrap_current_vxm(
+                        execution_config, runner, Path(bootstrap_name), verify_source,
+                    )
+                except RefreshFailure as exc:
+                    verify_source()
+                    if "argv mismatch" in str(exc):
+                        raise
+                    post_vxm = prior_vxm
+                    try:
+                        post_bootstrap = discover_inventory(
+                            bronze_root,
+                            require_all_asset_classes=False,
+                            allow_legacy_volatility_ids=True,
+                        )
+                    except (RefreshFailure, OSError, pa.ArrowInvalid):
+                        post_bootstrap = before
+                        bootstrap_unsafe_mutation = True
+                    else:
+                        post_vxm = tuple(
+                            entry
+                            for entry in post_bootstrap
+                            if entry.asset_class == "futures"
+                            and entry.symbol.startswith("VXM_")
+                        )
+                        bootstrap_unsafe_mutation = prior_vxm != post_vxm
+                        before = post_bootstrap
+                    failed_symbols = sorted(
+                        {
+                            entry.symbol
+                            for entry in (*prior_vxm, *post_vxm)
+                        }
+                    ) if not bootstrap_unsafe_mutation else [
+                        entry.symbol for entry in prior_vxm
+                    ]
+                    if not failed_symbols:
+                        failed_symbols = ["VXM"]
+                    timestamp = _utc_now()
+                    argv = _vxm_owner_argv(
+                        execution_config,
+                        Path(bootstrap_name) / "vxm-owner-result.json",
+                        Path(bootstrap_name) / "vxm-contract-mapping.json",
+                    )
+                    for symbol in failed_symbols:
+                        steps.append({
+                            "asset_class": "futures",
+                            "symbol": symbol,
+                            "argv_sha256": hashlib.sha256(
+                                _canonical_bytes(argv)
+                            ).hexdigest(),
+                            "started_at": timestamp,
+                            "ended_at": timestamp,
+                            "exit_code": None,
+                            "status": "failed",
+                        })
+                else:
+                    current_futures_contracts["VXM"] = mapping
+                    steps.append(step)
+                    before = discover_inventory(
+                        bronze_root,
+                        require_all_asset_classes=False,
+                        allow_legacy_volatility_ids=True,
+                    )
+    if current_futures_contracts:
+        current_vxm_symbol = str(current_futures_contracts["VXM"]["symbol"])
+        timestamp = _utc_now()
+        for entry in before:
+            if (
+                entry.asset_class == "futures"
+                and entry.symbol.startswith("VXM_")
+                and entry.symbol != current_vxm_symbol
+            ):
+                steps.append({
+                    "asset_class": "futures",
+                    "symbol": entry.symbol,
+                    "argv_sha256": None,
+                    "started_at": timestamp,
+                    "ended_at": timestamp,
+                    "exit_code": None,
+                    "status": "preserved",
+                })
     audit["inventory"] = before
     inventory_document = {
         "requested_as_of": config.as_of.isoformat(),
@@ -1388,8 +1743,6 @@ def _refresh_all_and_rebuild_locked(
     temp_db_parent = config.db_path.parent.parent
     temp_db_parent.mkdir(parents=True, exist_ok=True)
     temp_db = temp_db_parent / f".{config.db_path.name}.{uuid.uuid4().hex}.tmp"
-    steps: list[dict[str, object]] = []
-    audit["steps"] = steps
     try:
         with tempfile.TemporaryDirectory(prefix="mdw-m0-") as scratch_name:
             scratch = Path(scratch_name)
@@ -1411,23 +1764,47 @@ def _refresh_all_and_rebuild_locked(
                 presets = scratch / "presets"
                 presets.mkdir()
                 try:
+                    pre_refreshed = {
+                        (entry.asset_class, entry.symbol)
+                        for entry in before
+                        if config.bootstrap_current_vxm
+                        and config.refresh_broker_assets
+                        and entry.asset_class == "futures"
+                        and entry.symbol.startswith("VXM_")
+                    }
+                    refresh_inventory = [
+                        entry for entry in before
+                        if (entry.asset_class, entry.symbol) not in pre_refreshed
+                    ]
                     _refresh_inventory(
-                        execution_config, before, runner, presets, verify_execution_source, steps
+                        execution_config, refresh_inventory, runner, presets,
+                        verify_execution_source, steps,
                     )
+                    steps.sort(key=lambda step: (str(step["asset_class"]), str(step["symbol"])))
                     verify_execution_source()
                 finally:
                     for path in source_root.rglob("*"):
                         if path.is_dir():
                             path.chmod(0o700)
                     source_root.chmod(0o700)
+        if bootstrap_unsafe_mutation:
+            raise RefreshFailure("dynamic VXM owner mutated bronze before failing")
         phase_hook("refresh")
 
         after = discover_inventory(bronze_root, require_all_asset_classes=False)
+        before_identities = {(entry.asset_class, entry.symbol) for entry in before}
         _validate_post_inventory(
             before,
             after,
             config.as_of,
             refresh_broker_assets=config.refresh_broker_assets,
+            failed_identities=[
+                (str(step["asset_class"]), str(step["symbol"]))
+                for step in steps
+                if step["status"] in {"failed", "preserved"}
+                and (str(step["asset_class"]), str(step["symbol"]))
+                in before_identities
+            ],
         )
         _build_database(config, temp_db)
         phase_hook("rebuild")
@@ -1437,11 +1814,16 @@ def _refresh_all_and_rebuild_locked(
         with temp_db.open("rb") as handle:
             os.fsync(handle.fileno())
         db_sha256 = _sha256_file(temp_db)
+        failed_identities = _failed_identity_statuses(steps)
+        outcome = "degraded" if failed_identities else "succeeded"
         manifest: dict[str, object] = {
             "script_commit": identity["commit"],
             "script_tree": identity["tree"],
             "requested_as_of": config.as_of.isoformat(),
+            "outcome": outcome,
             "steps": steps,
+            "failed_identities": failed_identities,
+            "current_futures_contracts": current_futures_contracts,
             "pre_refresh_inventory": [_entry_document(entry) for entry in before],
             "post_refresh_inventory": [_entry_document(entry) for entry in after],
             "latest_sessions": {

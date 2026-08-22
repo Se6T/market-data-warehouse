@@ -27,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover - standalone script path
     sys.path.insert(0, str(PROJECT_ROOT))
 from clients.symbol_ids import stable_symbol_id
+from scripts._refresh_result import write_result
 
 console = Console()
 
@@ -235,6 +236,7 @@ def main() -> int:
         help=f"Warehouse directory (default: {DEFAULT_WAREHOUSE})",
     )
     parser.add_argument("--end", type=date.fromisoformat)
+    parser.add_argument("--result-json", type=Path)
     args = parser.parse_args()
     
     # Determine symbols to fetch
@@ -250,6 +252,7 @@ def main() -> int:
     console.print(f"\n[bold]Fetching CBOE volatility indices: {symbols}[/bold]\n")
     
     failed = 0
+    statuses = {symbol: "failed" for symbol in symbols}
     for symbol in symbols:
         try:
             bars = fetch_cboe_historical(symbol)
@@ -266,6 +269,7 @@ def main() -> int:
             
             table = bars_to_table(symbol, bars)
             write_bronze_parquet(table, symbol, args.warehouse)
+            statuses[symbol] = "succeeded"
             
             # Show date range
             dates = [date.fromisoformat(b["date"]) for b in bars]
@@ -276,6 +280,8 @@ def main() -> int:
             failed += 1
     
     console.print("[bold green]Done.[/bold green]")
+    if args.result_json is not None:
+        write_result(args.result_json, ASSET_CLASS, symbols, statuses)
     return 1 if failed else 0
 
 

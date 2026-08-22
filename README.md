@@ -344,11 +344,30 @@ The stable database authority is normalized to the immutable-generation-backed
 `duckdb/pre-refresh-inventory.json` unless `--inventory-path` is explicitly supplied.
 
 This command inventories every active equity, futures, volatility, and crypto
-Parquet identity; records physical schemas and SHA-256 hashes; refreshes each
-identity through its owning ingestion script; builds and validates a temporary
-multi-asset DuckDB; and only then writes an immutable versioned database/manifest
-generation and atomically promotes the `duckdb/current` symlink as the sole
-commit point.
+Parquet identity; records physical schemas and SHA-256 hashes; and invokes each
+non-empty asset-class owner at most once with a bounded per-identity result
+artifact. A dedicated PAPER-only owner dynamically discovers, refreshes, and
+publishes the current dated VXM contract before inventory freeze without a
+static expiry; older dated VXM contracts remain historical. A nonzero owner
+exit or ordinary owner exception is recorded as failed identity evidence while
+later identities and asset classes continue. The command may still publish an
+immutable `degraded` generation when
+each failed identity remains exactly its pre-refresh valid bronze file and the
+complete inventory has valid schemas/identities, non-regressing row counts and
+latest sessions, and no data beyond the requested as-of date. Successful
+identities must meet their ordinary freshness target.
+
+If a failed owner changes, removes, corrupts, or regresses its identity—or if
+any global integrity or publication check fails—nothing is published and the
+command exits unsuccessfully. A published manifest and its embedded `run_result`
+carry the `succeeded` or `degraded` outcome, every terminal step status, and a
+canonical failed-identity list without owner stderr or other command output. The
+`--preserve-broker-assets` mode continues to mark equity/futures as `preserved`
+and never accesses their broker owner.
+
+After those gates pass, the command builds and validates a temporary multi-asset
+DuckDB, writes an immutable versioned database/manifest generation, and
+atomically promotes the `duckdb/current` symlink as the sole commit point.
 The inventory path is create-only, so choose a new immutable path for every run.
 Any refresh, schema, count, identity, hash, or publication failure leaves the
 complete predecessor generation consumable. Stable readers must call

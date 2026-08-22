@@ -196,3 +196,35 @@ def test_main_fetches_writes_and_reports_completed_symbol(monkeypatch) -> None:
     report.assert_called_once_with(
         "BTC: rows=253 inserted=253 range=2024-01-01..2025-01-02"
     )
+
+
+def test_result_artifact_continues_after_independent_symbol_failure(
+    tmp_path, monkeypatch
+) -> None:
+    result_path = tmp_path / "result.json"
+    monkeypatch.setattr("sys.argv", [
+        "fetch_binance_crypto.py", "--end", "2025-01-02", "--symbols", "BTC", "ETH",
+        "--warehouse", str(tmp_path), "--result-json", str(result_path),
+    ])
+    rows = [
+        {"trade_date": "2025-01-02", "open": 1, "high": 2, "low": 0.5,
+         "close": 1.5, "adj_close": 1.5, "volume": 10}
+    ] * 253
+    with (
+        patch("scripts.fetch_binance_crypto.fetch_klines", side_effect=[RuntimeError("SECRET"), [["ok"]]]) as fetch,
+        patch("scripts.fetch_binance_crypto.klines_to_rows", return_value=rows),
+        patch("scripts.fetch_binance_crypto.write_rows", return_value=1) as write,
+    ):
+        assert bn.main() == 1
+
+    assert fetch.call_count == 2
+    write.assert_called_once()
+    assert json.loads(result_path.read_text()) == {
+        "schema_version": 1,
+        "asset_class": "crypto",
+        "requested_symbols": ["BTC", "ETH"],
+        "results": [
+            {"symbol": "BTC", "status": "failed"},
+            {"symbol": "ETH", "status": "succeeded"},
+        ],
+    }

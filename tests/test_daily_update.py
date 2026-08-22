@@ -656,6 +656,40 @@ def _mock_fallback_instance(date_to_bar=None):
 
 class TestMain:
     @pytest.mark.integration
+    def test_result_artifact_has_exact_status_for_every_requested_symbol(self, tmp_path, monkeypatch):
+        bronze_dir = tmp_path / "data-lake/bronze/asset_class=equity"
+        for symbol, day in (("AAPL", "2025-01-03"), ("MSFT", "2025-01-02")):
+            _seed_bronze(bronze_dir, symbol, [{
+                "trade_date": day, "symbol_id": 1, "open": 10.0, "high": 11.0,
+                "low": 9.0, "close": 10.0, "adj_close": 10.0, "volume": 100,
+            }])
+        preset = tmp_path / "batch.json"
+        preset.write_text(json.dumps({"name": "batch", "tickers": ["AAPL", "MSFT"]}))
+        result_path = tmp_path / "result.json"
+        monkeypatch.setattr("sys.argv", [
+            "daily_update.py", "--target-date", "2025-01-03", "--preset", str(preset),
+            "--result-json", str(result_path),
+        ])
+        mock_ib = _mock_ib_instance({"MSFT": []})
+        with (
+            _patch_ib_factory(mock_ib),
+            patch("scripts.daily_update.FallbackClient", return_value=_mock_fallback_instance()),
+            patch("scripts.daily_update.BronzeClient", lambda **kw: BronzeClient(bronze_dir=bronze_dir)),
+            patch("scripts.daily_update.DATA_LAKE", tmp_path / "data-lake"),
+        ):
+            assert main() == 1
+
+        assert json.loads(result_path.read_text()) == {
+            "schema_version": 1,
+            "asset_class": "equity",
+            "requested_symbols": ["AAPL", "MSFT"],
+            "results": [
+                {"symbol": "AAPL", "status": "succeeded"},
+                {"symbol": "MSFT", "status": "failed"},
+            ],
+        }
+
+    @pytest.mark.integration
     def test_not_trading_day_exits(self, monkeypatch, capsys):
         """main() exits early on non-trading day without --force."""
         monkeypatch.setattr("sys.argv", ["daily_update.py"])
@@ -1645,3 +1679,66 @@ class TestMain:
             main()
 
         mock_ib.connect.assert_called_once_with(host="10.0.0.5", port=4002)
+
+
+@pytest.mark.integration
+def test_all_up_to_date_writes_success_result_for_exact_preset(tmp_path, monkeypatch):
+    bronze_dir = tmp_path / "bronze"
+    _seed_bronze(bronze_dir, "AAPL", [{
+        "trade_date": "2025-01-03", "symbol_id": 1, "open": 10.0, "high": 11.0,
+        "low": 9.0, "close": 10.0, "adj_close": 10.0, "volume": 100,
+    }])
+    preset = tmp_path / "preset.json"
+    preset.write_text(json.dumps({"name": "exact", "tickers": ["AAPL"]}))
+    result = tmp_path / "result.json"
+    monkeypatch.setattr("sys.argv", [
+        "daily_update.py", "--target-date", "2025-01-03", "--preset", str(preset),
+        "--result-json", str(result),
+    ])
+    with patch(
+        "scripts.daily_update.BronzeClient",
+        lambda **_kw: BronzeClient(bronze_dir=bronze_dir),
+    ):
+        assert main() == 0
+    assert json.loads(result.read_text())["results"] == [
+        {"symbol": "AAPL", "status": "succeeded"},
+    ]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("failure", ["fallback", "publication"])
+def test_owner_failure_paths_leave_symbol_failed(tmp_path, monkeypatch, failure):
+    bronze_dir = tmp_path / "bronze"
+    _seed_bronze(bronze_dir, "AAPL", [{
+        "trade_date": "2025-01-02", "symbol_id": 1, "open": 10.0, "high": 11.0,
+        "low": 9.0, "close": 10.0, "adj_close": 10.0, "volume": 100,
+    }])
+    result = tmp_path / "result.json"
+    monkeypatch.setattr("sys.argv", [
+        "daily_update.py", "--target-date", "2025-01-03", "--result-json", str(result),
+    ])
+    mock_ib = _mock_ib_instance({
+        "AAPL": [] if failure == "fallback" else [_make_bar(date="2025-01-03")],
+    })
+    fallback = _mock_fallback_instance()
+    if failure == "fallback":
+        fallback.get_daily_bar.side_effect = RuntimeError("offline fake")
+
+    class FailingBronze(BronzeClient):
+        def merge_ticker_rows(self, symbol, rows):
+            if failure == "publication":
+                raise OSError("deterministic publication failure")
+            return super().merge_ticker_rows(symbol, rows)
+
+    with (
+        _patch_ib_factory(mock_ib),
+        patch("scripts.daily_update.FallbackClient", return_value=fallback),
+        patch(
+            "scripts.daily_update.BronzeClient",
+            lambda **_kw: FailingBronze(bronze_dir=bronze_dir),
+        ),
+    ):
+        assert main() == 1
+    assert json.loads(result.read_text())["results"] == [
+        {"symbol": "AAPL", "status": "failed"},
+    ]
