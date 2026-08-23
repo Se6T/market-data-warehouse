@@ -68,7 +68,15 @@ def _config(tmp_path: Path, warehouse: Path) -> m0.RefreshConfig:
 
 def _owner_request(argv: list[str]) -> tuple[Path, str, list[str]]:
     result_path = Path(argv[argv.index("--result-json") + 1])
-    if "--asset-class" in argv:
+    if "refresh_futures_batch.py" in " ".join(argv):
+        preset = json.loads(Path(argv[argv.index("--preset") + 1]).read_text())
+        ordinary = [
+            f"{item['root']}_{item['expiry']}" for item in preset["contracts"]
+        ]
+        prior_start = argv.index("--prior-vxm-symbols") + 1
+        asset_class = "futures"
+        symbols = [*ordinary, *argv[prior_start:]]
+    elif "--asset-class" in argv:
         asset_class = argv[argv.index("--asset-class") + 1]
         preset = json.loads(Path(argv[argv.index("--preset") + 1]).read_text())
         symbols = (
@@ -608,12 +616,10 @@ def test_dynamic_vxm_bootstraps_before_inventory_and_publishes_exact_mapping(
     tmp_path: Path,
 ) -> None:
     warehouse = _warehouse(tmp_path)
-    futures_file = next(warehouse.glob("data-lake/bronze/asset_class=futures/symbol=*/data.parquet"))
-    futures_file.unlink()
-    futures_file.parent.rmdir()
     config = _config(tmp_path, warehouse)
     object.__setattr__(config, "bootstrap_current_vxm", True)
     calls: list[list[str]] = []
+    futures_results: list[list[str]] = []
 
     class FakeIB:
         def connect(self, *_args, **_kwargs):
@@ -637,7 +643,8 @@ def test_dynamic_vxm_bootstraps_before_inventory_and_publishes_exact_mapping(
 
     def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
         calls.append(argv)
-        if "fetch_vxm_current.py" in " ".join(argv):
+        command = " ".join(argv)
+        if "fetch_vxm_current.py" in command or "refresh_futures_batch.py" in command:
             vxm.refresh_current_vxm(
                 warehouse=warehouse,
                 as_of=config.as_of,
@@ -648,6 +655,20 @@ def test_dynamic_vxm_bootstraps_before_inventory_and_publishes_exact_mapping(
                 port=int(argv[argv.index("--port") + 1]),
                 ib_factory=FakeIB,
             )
+            if "refresh_futures_batch.py" in command:
+                preset = json.loads(Path(argv[argv.index("--preset") + 1]).read_text())
+                symbols = [
+                    f"{item['root']}_{item['expiry']}" for item in preset["contracts"]
+                ] + ["VXM_20250219"]
+                futures_results.append(symbols)
+                Path(argv[argv.index("--result-json") + 1]).write_text(json.dumps({
+                    "schema_version": 1,
+                    "asset_class": "futures",
+                    "requested_symbols": symbols,
+                    "results": [
+                        {"symbol": symbol, "status": "succeeded"} for symbol in symbols
+                    ],
+                }))
             return subprocess.CompletedProcess(argv, 0, "ok", "")
         return _owner_completed(argv)
 
@@ -655,11 +676,14 @@ def test_dynamic_vxm_bootstraps_before_inventory_and_publishes_exact_mapping(
         config, command_runner=run, source_identity=_identity,
     )
 
-    assert "fetch_vxm_current.py" in " ".join(calls[0])
-    assert [calls[0][calls[0].index(flag) + 1] for flag in ("--host", "--port")] == [
+    futures_calls = [call for call in calls if "futures" in " ".join(call)]
+    assert len(futures_calls) == 1
+    assert "refresh_futures_batch.py" in " ".join(futures_calls[0])
+    assert [futures_calls[0][futures_calls[0].index(flag) + 1] for flag in ("--host", "--port")] == [
         "127.0.0.1", "4002",
     ]
     assert len(calls) == 4
+    assert futures_results == [["ES_202506", "VXM_20250219"]]
     assert manifest["current_futures_contracts"] == {
         "VXM": {
             "as_of": "2025-01-02", "con_id": 456,
@@ -678,10 +702,11 @@ def test_dynamic_vxm_bootstraps_before_inventory_and_publishes_exact_mapping(
     assert [(step["asset_class"], step["symbol"], step["status"]) for step in manifest["steps"]] == [
         ("crypto", "BTC", "succeeded"),
         ("equity", "AAPL", "succeeded"),
+        ("futures", "ES_202506", "succeeded"),
         ("futures", "VXM_20250219", "succeeded"),
         ("volatility", "VIX", "succeeded"),
     ]
-    assert manifest["row_counts"]["md.futures_daily"] == 1
+    assert manifest["row_counts"]["md.futures_daily"] == 2
 
 
 def test_dynamic_vxm_failure_preserves_identity_and_continues_other_classes(
@@ -704,8 +729,8 @@ def test_dynamic_vxm_failure_preserves_identity_and_continues_other_classes(
 
     def fail_vxm_only(argv: list[str]) -> subprocess.CompletedProcess[str]:
         calls.append(argv)
-        if "fetch_vxm_current.py" in " ".join(argv):
-            return subprocess.CompletedProcess(argv, 1, "SECRET", "SECRET")
+        if "refresh_futures_batch.py" in " ".join(argv):
+            return _owner_completed(argv, failed=frozenset({"VXM_20250219"}))
         return _owner_completed(argv)
 
     manifest = m0.refresh_all_and_rebuild(
@@ -721,9 +746,46 @@ def test_dynamic_vxm_failure_preserves_identity_and_continues_other_classes(
             "status": "failed",
         }
     ]
-    assert len(calls) == 5
+    assert len(calls) == 4
     assert config.inventory_path.exists()
     assert b"SECRET" not in json.dumps(manifest, sort_keys=True).encode()
+
+
+def test_initial_dynamic_vxm_failure_without_predecessor_publishes_nothing(
+    tmp_path: Path,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    config = _config(tmp_path, warehouse)
+    object.__setattr__(config, "bootstrap_current_vxm", True)
+    old = _seed_old_db(config)
+
+    def fail_futures(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        command = " ".join(argv)
+        if (
+            "fetch_vxm_current.py" in command
+            or "refresh_futures_batch.py" in command
+            or ("--asset-class" in argv and argv[argv.index("--asset-class") + 1] == "futures")
+        ):
+            return subprocess.CompletedProcess(argv, 1, "SECRET", "SECRET")
+        return _owner_completed(argv)
+
+    with pytest.raises(m0.RefreshFailure, match="no preservable VXM predecessor"):
+        m0.refresh_all_and_rebuild(
+            config, command_runner=fail_futures, source_identity=_identity,
+        )
+
+    assert config.db_path.read_bytes() == old
+    assert not any(
+        entry.asset_class == "futures" and entry.symbol.startswith("VXM_")
+        for entry in m0.discover_inventory(
+            warehouse / "data-lake" / "bronze", require_all_asset_classes=False,
+        )
+    )
+    [result_path] = _run_result_paths(config)
+    result = json.loads(result_path.read_text())
+    assert result["outcome"] == "failed"
+    assert result["failure_type"] == "RefreshFailure"
+    assert b"SECRET" not in result_path.read_bytes()
 
 
 def test_dynamic_vxm_failed_partial_mutation_blocks_publication_after_other_classes(
@@ -737,7 +799,7 @@ def test_dynamic_vxm_failed_partial_mutation_blocks_publication_after_other_clas
 
     def mutate_then_fail(argv: list[str]) -> subprocess.CompletedProcess[str]:
         calls.append(argv)
-        if "fetch_vxm_current.py" in " ".join(argv):
+        if "refresh_futures_batch.py" in " ".join(argv):
             target = next(
                 warehouse.glob(
                     "data-lake/bronze/asset_class=futures/symbol=*/data.parquet"
@@ -752,7 +814,7 @@ def test_dynamic_vxm_failed_partial_mutation_blocks_publication_after_other_clas
             config, command_runner=mutate_then_fail, source_identity=_identity,
         )
 
-    assert len(calls) == 5
+    assert len(calls) == 1
     assert config.db_path.read_bytes() == old
     [result_path] = _run_result_paths(config)
     assert json.loads(result_path.read_text())["outcome"] == "failed"
@@ -777,12 +839,18 @@ def test_futures_refresh_uses_the_owner_preset_contract(tmp_path: Path) -> None:
         if item.asset_class == "futures"
     )
     preset = tmp_path / "futures.json"
-    argv = m0._update_argv(config, [entry], preset, tmp_path / "result.json")
+    argv = m0._futures_owner_argv(
+        config, [entry], preset, tmp_path / "result.json", tmp_path / "mapping.json",
+    )
     assert argv[argv.index("--preset") + 1] == str(preset)
     assert json.loads(preset.read_text()) == {
         "contracts": [{"expiry": "202506", "root": "ES"}],
         "name": "m0-futures-batch",
     }
+    assert "refresh_futures_batch.py" in " ".join(argv)
+    assert [argv[argv.index(flag) + 1] for flag in ("--provider", "--host", "--port")] == [
+        "direct-ib", "127.0.0.1", "4002",
+    ]
 
 
 def test_refresh_batches_multiple_identities_into_one_owner_invocation_per_class(
@@ -1189,7 +1257,9 @@ def test_inventory_rejects_corrupt_parquet(tmp_path: Path, corruption: str, mess
         m0.discover_inventory(warehouse / "data-lake" / "bronze")
 
 
-def test_source_identity_and_default_runner_capture_output(tmp_path: Path) -> None:
+def test_source_identity_and_default_runner_capture_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     completed = [
         subprocess.CompletedProcess(["git"], 0, "", ""),
         subprocess.CompletedProcess(["git"], 0, "commit-id\n", ""),
@@ -1204,6 +1274,17 @@ def test_source_identity_and_default_runner_capture_output(tmp_path: Path) -> No
     assert all(call.kwargs["env"]["PATH"] == os.defpath for call in run.call_args_list)
     config = m0.RefreshConfig(tmp_path, tmp_path / "db", tmp_path / "manifest", tmp_path / "inventory", date(2025, 1, 2), Path("python"), tmp_path, 17)
     result = subprocess.CompletedProcess(["safe"], 0, "SECRET", "SECRET")
+    hostile = {
+        "MDW_IB_HOST": "live.invalid", "MDW_IB_PORT": "4001",
+        "MDW_RADON_API_URL": "https://remote.invalid", "MDW_API_KEY": "not-a-real-key",
+        "HTTP_PROXY": "http://proxy.invalid", "HTTPS_PROXY": "http://proxy.invalid",
+        "ALL_PROXY": "socks5://proxy.invalid", "NO_PROXY": "",
+        "PYTHONPATH": "/hostile", "PYTHONHOME": "/hostile",
+        "LD_PRELOAD": "/hostile.so", "DYLD_INSERT_LIBRARIES": "/hostile.dylib",
+        "VIRTUAL_ENV": "/hostile", "HOME": "/hostile", "AWS_SECRET_ACCESS_KEY": "fake",
+    }
+    for key, value in hostile.items():
+        monkeypatch.setenv(key, value)
     with patch.object(m0.subprocess, "run", return_value=result) as run:
         assert m0._default_runner(config)(["safe"]) is result
     kwargs = run.call_args.kwargs
@@ -1214,9 +1295,10 @@ def test_source_identity_and_default_runner_capture_output(tmp_path: Path) -> No
         "text": True,
         "timeout": 17,
     }
-    assert kwargs["env"]["MDW_WAREHOUSE"] == str(tmp_path)
-    assert not any(key.startswith("PYTHON") for key in kwargs["env"])
-    assert not any(key.startswith(("LD_", "DYLD_")) for key in kwargs["env"])
+    assert kwargs["env"] == {
+        "MDW_WAREHOUSE": str(tmp_path),
+        "PATH": os.defpath,
+    }
 
 
 def test_owner_executes_sealed_committed_bytes_not_mutable_materialization(

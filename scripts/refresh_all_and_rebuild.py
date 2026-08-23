@@ -591,6 +591,9 @@ def _update_argv(
             "--target-date", config.as_of.isoformat(),
             "--force",
             "--preset", str(preset),
+            "--provider", "direct-ib",
+            "--host", config.vxm_host,
+            "--port", str(config.vxm_port),
         ]
     elif asset_class == "volatility":
         owner_argv = [
@@ -672,19 +675,38 @@ def _read_owner_result(
         raise RefreshFailure(message) from exc
 
 
-def _vxm_owner_argv(
-    config: RefreshConfig, result_json: Path, mapping_json: Path,
+def _futures_owner_argv(
+    config: RefreshConfig,
+    entries: Sequence[InventoryEntry],
+    preset: Path,
+    result_json: Path,
+    mapping_json: Path,
 ) -> list[str]:
+    ordinary = [entry for entry in entries if not entry.symbol.startswith("VXM_")]
+    preset.write_bytes(_canonical_bytes({
+        "name": "m0-futures-batch",
+        "contracts": [
+            {
+                "root": entry.symbol.rsplit("_", 1)[0],
+                "expiry": entry.symbol.rsplit("_", 1)[1],
+            }
+            for entry in ordinary
+        ],
+    }))
+    prior_vxm = [entry.symbol for entry in entries if entry.symbol.startswith("VXM_")]
     owner_argv = [
         str(config.python),
-        str(config.repo_root / "scripts" / "fetch_vxm_current.py"),
+        str(config.repo_root / "scripts" / "refresh_futures_batch.py"),
         "--warehouse", str(config.warehouse),
         "--as-of", config.as_of.isoformat(),
+        "--preset", str(preset),
         "--result-json", str(result_json),
         "--mapping-json", str(mapping_json),
         "--roll-days", str(config.vxm_roll_days),
+        "--provider", "direct-ib",
         "--host", config.vxm_host,
         "--port", str(config.vxm_port),
+        "--prior-vxm-symbols", *prior_vxm,
     ]
     return _seal_owner_argv(config, owner_argv)
 
@@ -734,52 +756,70 @@ def _read_vxm_mapping(path: Path, config: RefreshConfig) -> dict[str, object]:
         raise RefreshFailure(message) from exc
 
 
-def _bootstrap_current_vxm(
+def _refresh_futures_owner(
     config: RefreshConfig,
+    entries: Sequence[InventoryEntry],
     command_runner: CommandRunner,
     scratch: Path,
     verify_source: Callable[[], None],
-) -> tuple[dict[str, object], dict[str, object]]:
-    result_path = scratch / "vxm-owner-result.json"
+) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
+    result_path = scratch / "futures-owner-result.json"
     mapping_path = scratch / "vxm-contract-mapping.json"
+    preset_path = scratch / "futures-preset.json"
     verify_source()
     started = _utc_now()
-    argv = _vxm_owner_argv(config, result_path, mapping_path)
+    argv = _futures_owner_argv(
+        config, entries, preset_path, result_path, mapping_path,
+    )
     argv_sha256 = hashlib.sha256(_canonical_bytes(argv)).hexdigest()
     try:
         result = command_runner(argv)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RefreshFailure("dynamic VXM owner transport failed") from exc
+    except (OSError, subprocess.TimeoutExpired):
+        result = subprocess.CompletedProcess(argv, 1, "", "")
     if result.args != argv:
-        raise RefreshFailure("dynamic VXM owner argv mismatch")
-    if int(result.returncode) != 0:
-        raise RefreshFailure("dynamic VXM owner failed")
-    mapping = _read_vxm_mapping(mapping_path, config)
-    symbol = str(mapping["symbol"])
-    statuses = _read_owner_result(result_path, "futures", [symbol])
-    if statuses != {symbol: "succeeded"}:
-        raise RefreshFailure("dynamic VXM owner result is invalid")
+        raise RefreshFailure("futures owner argv mismatch")
+    exit_code = int(result.returncode)
+    mapping = _read_vxm_mapping(mapping_path, config) if mapping_path.exists() else None
+    if exit_code != 0 and mapping is not None:
+        raise RefreshFailure("failed futures owner published a VXM mapping")
+    ordinary = [entry.symbol for entry in entries if not entry.symbol.startswith("VXM_")]
+    prior_vxm = [entry.symbol for entry in entries if entry.symbol.startswith("VXM_")]
+    requested = [*ordinary, *([str(mapping["symbol"])] if mapping else prior_vxm)]
+    if result_path.exists():
+        statuses = _read_owner_result(result_path, "futures", requested)
+    elif exit_code != 0:
+        statuses = {symbol: "failed" for symbol in requested}
+    else:
+        raise RefreshFailure("futures owner result is invalid")
+    expected_success = bool(statuses) and all(
+        status == "succeeded" for status in statuses.values()
+    )
+    if (exit_code == 0) != expected_success:
+        raise RefreshFailure("futures owner result exit status mismatch")
+    if exit_code == 0 and mapping is None:
+        raise RefreshFailure("successful futures owner omitted VXM mapping")
     verify_source()
-    return mapping, {
-        "asset_class": "futures",
-        "symbol": symbol,
-        "argv_sha256": argv_sha256,
-        "started_at": started,
-        "ended_at": _utc_now(),
-        "exit_code": 0,
-        "status": "succeeded",
-    }
+    ended = _utc_now()
+    return mapping, [
+        {
+            "asset_class": "futures",
+            "symbol": symbol,
+            "argv_sha256": argv_sha256,
+            "started_at": started,
+            "ended_at": ended,
+            "exit_code": exit_code,
+            "status": status,
+        }
+        for symbol, status in statuses.items()
+    ]
 
 
 def _default_runner(config: RefreshConfig) -> CommandRunner:
     def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
         env = {
-            key: value
-            for key, value in os.environ.items()
-            if not key.startswith(("PYTHON", "LD_", "DYLD_")) and key != "VIRTUAL_ENV"
+            "PATH": os.defpath,
+            "MDW_WAREHOUSE": str(config.warehouse),
         }
-        env["PATH"] = os.defpath
-        env["MDW_WAREHOUSE"] = str(config.warehouse)
         return subprocess.run(
             argv,
             cwd=config.repo_root,
@@ -1626,7 +1666,7 @@ def _refresh_all_and_rebuild_locked(
     steps: list[dict[str, object]] = []
     audit["steps"] = steps
     current_futures_contracts: dict[str, dict[str, object]] = {}
-    bootstrap_unsafe_mutation = False
+
     before = discover_inventory(
         bronze_root,
         require_all_asset_classes=False,
@@ -1635,12 +1675,16 @@ def _refresh_all_and_rebuild_locked(
     if not before:
         raise RefreshFailure("canonical bronze inventory is empty")
     if config.bootstrap_current_vxm and config.refresh_broker_assets:
+        initial_before = tuple(before)
         prior_vxm = tuple(
             entry
-            for entry in before
+            for entry in initial_before
             if entry.asset_class == "futures" and entry.symbol.startswith("VXM_")
         )
-        with tempfile.TemporaryDirectory(prefix="mdw-vxm-bootstrap-") as bootstrap_name:
+        futures_entries = tuple(
+            entry for entry in initial_before if entry.asset_class == "futures"
+        )
+        with tempfile.TemporaryDirectory(prefix="mdw-futures-owner-") as bootstrap_name:
             with _sealed_execution_source(config.repo_root, identity) as sealed_source:
                 execution_config = replace(
                     config, source_archive_fd=sealed_source.fileno(),
@@ -1649,69 +1693,58 @@ def _refresh_all_and_rebuild_locked(
                 verify_source = lambda: _verify_source_identity(
                     config.repo_root, identity, source_identity
                 )
-                try:
-                    mapping, step = _bootstrap_current_vxm(
-                        execution_config, runner, Path(bootstrap_name), verify_source,
-                    )
-                except RefreshFailure as exc:
-                    verify_source()
-                    if "argv mismatch" in str(exc):
-                        raise
-                    post_vxm = prior_vxm
-                    try:
-                        post_bootstrap = discover_inventory(
-                            bronze_root,
-                            require_all_asset_classes=False,
-                            allow_legacy_volatility_ids=True,
-                        )
-                    except (RefreshFailure, OSError, pa.ArrowInvalid):
-                        post_bootstrap = before
-                        bootstrap_unsafe_mutation = True
-                    else:
-                        post_vxm = tuple(
-                            entry
-                            for entry in post_bootstrap
-                            if entry.asset_class == "futures"
-                            and entry.symbol.startswith("VXM_")
-                        )
-                        bootstrap_unsafe_mutation = prior_vxm != post_vxm
-                        before = post_bootstrap
-                    failed_symbols = sorted(
-                        {
-                            entry.symbol
-                            for entry in (*prior_vxm, *post_vxm)
-                        }
-                    ) if not bootstrap_unsafe_mutation else [
-                        entry.symbol for entry in prior_vxm
-                    ]
-                    if not failed_symbols:
-                        failed_symbols = ["VXM"]
-                    timestamp = _utc_now()
-                    argv = _vxm_owner_argv(
-                        execution_config,
-                        Path(bootstrap_name) / "vxm-owner-result.json",
-                        Path(bootstrap_name) / "vxm-contract-mapping.json",
-                    )
-                    for symbol in failed_symbols:
-                        steps.append({
-                            "asset_class": "futures",
-                            "symbol": symbol,
-                            "argv_sha256": hashlib.sha256(
-                                _canonical_bytes(argv)
-                            ).hexdigest(),
-                            "started_at": timestamp,
-                            "ended_at": timestamp,
-                            "exit_code": None,
-                            "status": "failed",
-                        })
-                else:
-                    current_futures_contracts["VXM"] = mapping
-                    steps.append(step)
-                    before = discover_inventory(
-                        bronze_root,
-                        require_all_asset_classes=False,
-                        allow_legacy_volatility_ids=True,
-                    )
+                mapping, futures_steps = _refresh_futures_owner(
+                    execution_config,
+                    futures_entries,
+                    runner,
+                    Path(bootstrap_name),
+                    verify_source,
+                )
+                steps.extend(futures_steps)
+        try:
+            post_bootstrap = discover_inventory(
+                bronze_root,
+                require_all_asset_classes=False,
+                allow_legacy_volatility_ids=True,
+            )
+        except (RefreshFailure, OSError, pa.ArrowInvalid) as exc:
+            raise RefreshFailure("dynamic VXM owner mutated bronze before failing") from exc
+        initial_map = {
+            (entry.asset_class, entry.symbol): entry for entry in initial_before
+        }
+        post_map = {
+            (entry.asset_class, entry.symbol): entry for entry in post_bootstrap
+        }
+        failed = {
+            (str(step["asset_class"]), str(step["symbol"]))
+            for step in futures_steps
+            if step["status"] == "failed"
+        }
+        unsafe_mutation = any(
+            identity_key not in initial_map
+            or identity_key not in post_map
+            or initial_map[identity_key].sha256 != post_map[identity_key].sha256
+            for identity_key in failed
+        )
+        if mapping is None:
+            post_vxm = tuple(
+                entry
+                for entry in post_bootstrap
+                if entry.asset_class == "futures" and entry.symbol.startswith("VXM_")
+            )
+            unsafe_mutation = unsafe_mutation or prior_vxm != post_vxm
+            if unsafe_mutation:
+                raise RefreshFailure("dynamic VXM owner mutated bronze before failing")
+            if not prior_vxm:
+                raise RefreshFailure(
+                    "dynamic VXM owner failed with no preservable VXM predecessor"
+                )
+        else:
+            mapped_identity = ("futures", str(mapping["symbol"]))
+            if mapped_identity not in post_map:
+                raise RefreshFailure("dynamic VXM owner mapping identity is absent")
+            current_futures_contracts["VXM"] = mapping
+        before = post_bootstrap
     if current_futures_contracts:
         current_vxm_symbol = str(current_futures_contracts["VXM"]["symbol"])
         timestamp = _utc_now()
@@ -1770,7 +1803,6 @@ def _refresh_all_and_rebuild_locked(
                         if config.bootstrap_current_vxm
                         and config.refresh_broker_assets
                         and entry.asset_class == "futures"
-                        and entry.symbol.startswith("VXM_")
                     }
                     refresh_inventory = [
                         entry for entry in before
@@ -1787,8 +1819,6 @@ def _refresh_all_and_rebuild_locked(
                         if path.is_dir():
                             path.chmod(0o700)
                     source_root.chmod(0o700)
-        if bootstrap_unsafe_mutation:
-            raise RefreshFailure("dynamic VXM owner mutated bronze before failing")
         phase_hook("refresh")
 
         after = discover_inventory(bronze_root, require_all_asset_classes=False)

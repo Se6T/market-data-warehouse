@@ -38,6 +38,7 @@ import sys
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Sequence
 
 from ib_insync import Future, Index, Stock
 from rich.console import Console
@@ -511,7 +512,7 @@ def resolve_target_date(today: date, requested_target: str | None, force: bool) 
 # ── Main ───────────────────────────────────────────────────────────────
 
 
-def main():
+def main(argv: Sequence[str] | None = None):
     parser = argparse.ArgumentParser(description="Daily market data update")
     parser.add_argument(
         "--host", type=str,
@@ -522,6 +523,10 @@ def main():
         "--port", type=int,
         default=int(os.getenv("MDW_IB_PORT", "4001")),
         help="IB Gateway port (default: $MDW_IB_PORT or 4001)",
+    )
+    parser.add_argument(
+        "--provider", choices=["direct-ib"], default="direct-ib",
+        help="Historical provider authority (only direct-ib is accepted).",
     )
     parser.add_argument(
         "--max-concurrent", type=int, default=6,
@@ -556,7 +561,7 @@ def main():
         help="Asset class to update (default: equity).",
     )
     parser.add_argument("--result-json", type=Path)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=logging.INFO,

@@ -257,9 +257,13 @@ access, then invokes each non-empty asset-class owner at most once with a
 bounded result artifact carrying one exact terminal status per requested
 identity (except explicitly preserved broker assets). A nonzero owner exit or
 ordinary owner exception is recorded as failed identity evidence without
-stopping unrelated identities or later asset classes. VXM is bootstrapped and
-rolled by its dedicated PAPER-only dynamic contract owner before inventory
-freeze; prior dated VXM contracts remain immutable historical identities. It
+stopping unrelated identities or later asset classes. One composite PAPER-only
+futures owner refreshes ordinary futures and dynamically bootstraps/rolls VXM
+before inventory freeze; prior dated VXM contracts remain immutable historical
+identities. Owner subprocesses receive an exact allowlisted environment, while
+provider and `127.0.0.1:4002` PAPER routing are carried in sealed argv. An
+initial VXM failure with no valid predecessor is fatal and cannot publish a
+degraded generation. It
 can publish a `degraded` generation only when every failed
 identity still has the exact pre-refresh valid Parquet data, and every identity
 has a valid schema/identity, non-regressing row count/latest session, and no

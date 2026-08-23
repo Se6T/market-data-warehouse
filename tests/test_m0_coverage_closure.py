@@ -857,31 +857,87 @@ def test_dynamic_vxm_mapping_rejects_bounded_schema_and_semantic_violations(
         m0._read_vxm_mapping(path, config)
 
 
-@pytest.mark.parametrize("failure", ["transport", "argv", "status"])
-def test_dynamic_vxm_bootstrap_rejects_transport_argv_and_status_evidence(
-    tmp_path: Path, failure: str,
+def test_futures_owner_transport_failure_is_an_exact_failed_identity(
+    tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
-    mapping = _valid_vxm_mapping(config)
-    expected_argv = m0._vxm_owner_argv(
-        config, tmp_path / "vxm-owner-result.json", tmp_path / "vxm-contract-mapping.json",
+    _mapping, steps = m0._refresh_futures_owner(
+        config,
+        [_entry("futures", "VXM_20250219")],
+        lambda _argv: (_ for _ in ()).throw(OSError("transport")),
+        tmp_path,
+        lambda: None,
     )
+    assert [(step["symbol"], step["status"]) for step in steps] == [
+        ("VXM_20250219", "failed")
+    ]
+
+
+@pytest.mark.parametrize(
+    "failure", ["argv", "status", "mapping_on_failure", "missing_result", "omitted_mapping"]
+)
+def test_futures_owner_rejects_invalid_process_evidence(tmp_path: Path, failure: str) -> None:
+    config = _config(tmp_path)
+    mapping = _valid_vxm_mapping(config)
 
     def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        if failure == "transport":
-            raise OSError("deterministic transport failure")
+        result_path = Path(argv[argv.index("--result-json") + 1])
+        mapping_path = Path(argv[argv.index("--mapping-json") + 1])
+        if failure != "missing_result":
+            result_path.write_text("{}")
+        if failure in {"status", "mapping_on_failure"}:
+            mapping_path.write_text("{}")
         return subprocess.CompletedProcess(
-            ["different"] if failure == "argv" else argv, 0, "", "",
+            ["different"] if failure == "argv" else argv,
+            1 if failure == "mapping_on_failure" else 0,
+            "",
+            "",
         )
 
-    statuses = {str(mapping["symbol"]): "failed" if failure == "status" else "succeeded"}
+    statuses = {
+        str(mapping["symbol"]): "succeeded" if failure == "omitted_mapping" else "failed"
+    }
     with (
         patch.object(m0, "_read_vxm_mapping", return_value=mapping),
         patch.object(m0, "_read_owner_result", return_value=statuses),
         pytest.raises(m0.RefreshFailure),
     ):
-        m0._bootstrap_current_vxm(config, runner, tmp_path, lambda: None)
-    assert expected_argv[1].endswith("fetch_vxm_current.py")
+        m0._refresh_futures_owner(
+            config, [_entry("futures", "VXM_20250219")], runner, tmp_path, lambda: None
+        )
+
+
+@pytest.mark.parametrize("failure", ["mutated_failed_predecessor", "mapping_absent"])
+def test_vxm_post_owner_inventory_guards(tmp_path: Path, failure: str) -> None:
+    config = _config(tmp_path)
+    object.__setattr__(config, "bootstrap_current_vxm", True)
+    old = _entry("futures", "VXM_20250122")
+    post = replace(old, sha256="c" * 64) if failure == "mutated_failed_predecessor" else old
+    mapping = _valid_vxm_mapping(config) if failure == "mapping_absent" else None
+    step = {
+        "asset_class": "futures",
+        "symbol": old.symbol if mapping is None else str(mapping["symbol"]),
+        "argv_sha256": "a" * 64,
+        "started_at": "start",
+        "ended_at": "end",
+        "exit_code": 1 if mapping is None else 0,
+        "status": "failed" if mapping is None else "succeeded",
+    }
+    identity = {"commit": "a" * 40, "tree": "b" * 40}
+    with tempfile.TemporaryFile() as sealed:
+        with (
+            patch.object(m0, "discover_inventory", side_effect=[[old], [post]]),
+            patch.object(m0, "_sealed_execution_source", return_value=contextlib.nullcontext(sealed)),
+            patch.object(m0, "_refresh_futures_owner", return_value=(mapping, [step])),
+            pytest.raises(m0.RefreshFailure, match="mutated|mapping identity is absent"),
+        ):
+            m0._refresh_all_and_rebuild_locked(
+                config,
+                audit={},
+                run_id="run",
+                started_at="start",
+                source_identity=lambda _root: identity,
+            )
 
 
 def test_batch_owner_exit_code_must_match_exact_symbol_statuses(tmp_path: Path) -> None:
@@ -925,7 +981,7 @@ def test_dynamic_vxm_argv_mismatch_is_never_degraded(tmp_path: Path) -> None:
             patch.object(m0, "discover_inventory", return_value=[_entry("futures", "VXM_20250219")]),
             patch.object(m0, "_sealed_execution_source", return_value=contextlib.nullcontext(sealed)),
             patch.object(
-                m0, "_bootstrap_current_vxm",
+                m0, "_refresh_futures_owner",
                 side_effect=m0.RefreshFailure("dynamic VXM owner argv mismatch"),
             ),
             pytest.raises(m0.RefreshFailure, match="argv mismatch"),
@@ -957,7 +1013,7 @@ def test_successful_dynamic_vxm_bootstrap_marks_older_contract_preserved(
         with (
             patch.object(m0, "discover_inventory", side_effect=[[old], [old, current]]),
             patch.object(m0, "_sealed_execution_source", return_value=contextlib.nullcontext(sealed)),
-            patch.object(m0, "_bootstrap_current_vxm", return_value=(mapping, owner_step)),
+            patch.object(m0, "_refresh_futures_owner", return_value=(mapping, [owner_step])),
             patch.object(m0, "_write_immutable", side_effect=RuntimeError("stop after inventory")),
             pytest.raises(RuntimeError, match="stop after inventory"),
         ):
