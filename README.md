@@ -340,8 +340,10 @@ python scripts/refresh_all_and_rebuild.py \
 ```
 
 The stable database authority is normalized to the immutable-generation-backed
-`duckdb/current/market.duckdb` bundle. The pre-refresh inventory is written to
-`duckdb/pre-refresh-inventory.json` unless `--inventory-path` is explicitly supplied.
+`duckdb/current/market.duckdb` bundle. By default, each pre-refresh inventory is
+written create-only to
+`duckdb/inventories/pre-refresh-<as-of>-<uuid>.json`; `--inventory-path` may
+instead supply an explicit create-only path.
 
 This command inventories every active equity, futures, volatility, and crypto
 Parquet identity; records physical schemas and SHA-256 hashes; and invokes each
@@ -353,7 +355,7 @@ remain historical. Owner subprocesses receive an exact allowlisted environment;
 provider and `127.0.0.1:4002` PAPER routing are carried in sealed argv. A
 nonzero owner exit or ordinary owner exception is recorded as failed identity
 evidence while later identities and asset classes continue. The command may
-immutable `degraded` generation when
+publish an immutable `degraded` generation when
 each failed identity remains exactly its pre-refresh valid bronze file and the
 complete inventory has valid schemas/identities, non-regressing row counts and
 latest sessions, and no data beyond the requested as-of date. Successful

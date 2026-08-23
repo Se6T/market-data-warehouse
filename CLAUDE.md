@@ -249,8 +249,10 @@ python scripts/refresh_all_and_rebuild.py \
 ```
 
 The stable database authority is normalized to the immutable-generation-backed
-`duckdb/current/market.duckdb` bundle. The pre-refresh inventory is written to
-`duckdb/pre-refresh-inventory.json` unless `--inventory-path` is explicitly supplied.
+`duckdb/current/market.duckdb` bundle. By default, each pre-refresh inventory is
+written create-only to
+`duckdb/inventories/pre-refresh-<as-of>-<uuid>.json`; `--inventory-path` may
+instead supply an explicit create-only path.
 
 It inventories and hashes every canonical physical Parquet file before source
 access, then invokes each non-empty asset-class owner at most once with a
@@ -263,8 +265,7 @@ before inventory freeze; prior dated VXM contracts remain immutable historical
 identities. Owner subprocesses receive an exact allowlisted environment, while
 provider and `127.0.0.1:4002` PAPER routing are carried in sealed argv. An
 initial VXM failure with no valid predecessor is fatal and cannot publish a
-degraded generation. It
-can publish a `degraded` generation only when every failed
+degraded generation. It can publish a `degraded` generation only when every failed
 identity still has the exact pre-refresh valid Parquet data, and every identity
 has a valid schema/identity, non-regressing row count/latest session, and no
 session later than the requested as-of date. Successful identities must still

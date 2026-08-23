@@ -219,8 +219,8 @@ def _validate_config(config: RefreshConfig) -> None:
         raise RefreshFailure("bootstrap_current_vxm must be an exact bool")
     if type(config.vxm_roll_days) is not int or config.vxm_roll_days < 0:
         raise RefreshFailure("vxm_roll_days must be a non-negative integer")
-    if type(config.vxm_host) is not str or not config.vxm_host:
-        raise RefreshFailure("vxm_host must be non-empty")
+    if type(config.vxm_host) is not str or config.vxm_host != "127.0.0.1":
+        raise RefreshFailure("broker owners require exact 127.0.0.1 host")
     if type(config.vxm_port) is not int or config.vxm_port != 4002:
         raise RefreshFailure("dynamic VXM owner requires PAPER port 4002")
     paths = (config.db_path, config.manifest_path, config.inventory_path)

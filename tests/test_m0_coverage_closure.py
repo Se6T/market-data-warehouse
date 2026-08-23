@@ -759,7 +759,10 @@ def test_run_result_fails_closed_on_directory_file_and_cleanup_faults(
     [
         ("bootstrap_current_vxm", 1, "exact bool"),
         ("vxm_roll_days", -1, "non-negative integer"),
-        ("vxm_host", "", "must be non-empty"),
+        ("vxm_host", "", "exact 127.0.0.1"),
+        ("vxm_host", "127.0.0.2", "exact 127.0.0.1"),
+        ("vxm_host", "::1", "exact 127.0.0.1"),
+        ("vxm_host", "broker.example", "exact 127.0.0.1"),
         ("vxm_port", 4001, "PAPER port 4002"),
     ],
 )
