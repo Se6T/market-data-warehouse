@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -19,6 +20,11 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from ib_insync import Contract, IB
+
+# Resolve project root for sealed-environment import safety.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from clients.bronze_client import BronzeClient
 from clients.symbol_ids import stable_symbol_id

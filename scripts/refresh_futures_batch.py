@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Callable, Sequence
+
+# Resolve project root for sealed-environment import safety.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from scripts import daily_update
 from scripts._refresh_result import write_result
