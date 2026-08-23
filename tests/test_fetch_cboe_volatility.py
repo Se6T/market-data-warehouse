@@ -125,6 +125,20 @@ class TestBarsToTable:
               "low": "17.61", "close": "17.70", "volume": "0"}],
         ) is None
 
+    def test_holiday_bars_are_dropped(self):
+        """CBOE holiday publications are not canonical sessions."""
+        bars = [
+            {"date": "2021-04-01", "open": "10.0", "high": "11.0",
+             "low": "9.0", "close": "10.5", "volume": "0"},   # Thursday session
+            {"date": "2021-04-02", "open": "10.5", "high": "12.0",
+             "low": "10.0", "close": "11.0", "volume": "0"},   # Good Friday
+            {"date": "2021-04-05", "open": "11.0", "high": "12.0",
+             "low": "10.5", "close": "11.5", "volume": "0"},   # Monday session
+        ]
+        table = bars_to_table("VIX", bars)
+        dates = [d.isoformat() for d in table.column("trade_date").to_pylist()]
+        assert dates == ["2021-04-01", "2021-04-05"]
+
     def test_empty_bars_returns_none(self):
         """Empty bars list returns None."""
         assert bars_to_table("VXHYG", []) is None

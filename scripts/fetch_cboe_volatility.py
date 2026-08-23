@@ -31,6 +31,26 @@ from scripts._refresh_result import write_result
 
 console = Console()
 
+_XNYS_CALENDAR: Any = None
+
+
+def _is_canonical_session(day: str) -> bool:
+    """True when the date is a canonical XNYS session.
+
+    CBOE publishes several volatility indices on exchange holidays; the
+    admission calendar treats those dates as non-sessions, so a holiday bar
+    would make session coverage non-canonical. exchange_calendars is the same
+    library the portfolio-engine admission path uses (XNYS).
+    """
+    global _XNYS_CALENDAR
+    if _XNYS_CALENDAR is None:
+        import exchange_calendars
+
+        _XNYS_CALENDAR = exchange_calendars.get_calendar(
+            "XNYS", start="1990-01-01", end="2050-12-31"
+        )
+    return bool(_XNYS_CALENDAR.is_session(day))
+
 CBOE_HISTORICAL_URL = "https://cdn.cboe.com/api/global/delayed_quotes/charts/historical/_{symbol}.json"
 
 # CBOE's public history for these indices has unrecoverable source-side holes
@@ -112,6 +132,13 @@ def bars_to_table(symbol: str, bars: list[dict[str, Any]]) -> pa.Table:
         if not bars:
             console.print(f"  {symbol}: no bars on/after coverage start {coverage_start}")
             return None
+
+    # CBOE publishes several volatility indices on exchange holidays; the
+    # admission calendar treats those as non-sessions, so a holiday bar makes
+    # coverage non-canonical. Keep only canonical equity-session dates.
+    bars = [bar for bar in bars if _is_canonical_session(bar["date"])]
+    if not bars:
+        return None
     
     records = []
     for bar in bars:
@@ -171,6 +198,26 @@ def write_bronze_parquet(
                     f"  {symbol}: dropped {dropped_rows} pre-coverage rows "
                     f"(coverage starts {coverage_start})"
                 )
+
+        # Drop holiday bars that CBOE published but the canonical session
+        # calendar does not recognize (see _is_canonical_session).
+        existing_dates_list = existing.column("trade_date").to_pylist()
+        non_session_rows = [
+            i
+            for i, day in enumerate(existing_dates_list)
+            if not _is_canonical_session(day.isoformat())
+        ]
+        if non_session_rows:
+            session_mask = pc.invert(
+                pa.array(
+                    [i in non_session_rows for i in range(existing.num_rows)],
+                    type=pa.bool_(),
+                )
+            )
+            existing = existing.filter(session_mask)
+            console.print(
+                f"  {symbol}: dropped {len(non_session_rows)} non-session rows"
+            )
 
         # Normalize existing schema to match expected columns (handles schema drift)
         expected_columns = table.column_names
