@@ -780,8 +780,6 @@ def _refresh_futures_owner(
         raise RefreshFailure("futures owner argv mismatch")
     exit_code = int(result.returncode)
     mapping = _read_vxm_mapping(mapping_path, config) if mapping_path.exists() else None
-    if exit_code != 0 and mapping is not None:
-        raise RefreshFailure("failed futures owner published a VXM mapping")
     ordinary = [entry.symbol for entry in entries if not entry.symbol.startswith("VXM_")]
     prior_vxm = [entry.symbol for entry in entries if entry.symbol.startswith("VXM_")]
     requested = [*ordinary, *([str(mapping["symbol"])] if mapping else prior_vxm)]
@@ -791,6 +789,8 @@ def _refresh_futures_owner(
         statuses = {symbol: "failed" for symbol in requested}
     else:
         raise RefreshFailure("futures owner result is invalid")
+    if mapping is not None and statuses.get(str(mapping["symbol"])) != "succeeded":
+        raise RefreshFailure("failed VXM identity published a mapping")
     expected_success = bool(statuses) and all(
         status == "succeeded" for status in statuses.values()
     )

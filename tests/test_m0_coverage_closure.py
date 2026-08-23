@@ -885,7 +885,7 @@ def test_futures_owner_rejects_invalid_process_evidence(tmp_path: Path, failure:
         mapping_path = Path(argv[argv.index("--mapping-json") + 1])
         if failure != "missing_result":
             result_path.write_text("{}")
-        if failure in {"status", "mapping_on_failure"}:
+        if failure == "mapping_on_failure":
             mapping_path.write_text("{}")
         return subprocess.CompletedProcess(
             ["different"] if failure == "argv" else argv,
@@ -905,6 +905,34 @@ def test_futures_owner_rejects_invalid_process_evidence(tmp_path: Path, failure:
         m0._refresh_futures_owner(
             config, [_entry("futures", "VXM_20250219")], runner, tmp_path, lambda: None
         )
+
+
+def test_futures_owner_accepts_valid_vxm_mapping_with_unrelated_partial_failure(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    mapping = _valid_vxm_mapping(config)
+    mapped_symbol = str(mapping["symbol"])
+
+    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        Path(argv[argv.index("--result-json") + 1]).write_text("{}")
+        Path(argv[argv.index("--mapping-json") + 1]).write_text("{}")
+        return subprocess.CompletedProcess(argv, 1, "", "")
+
+    statuses = {"ES_202506": "failed", mapped_symbol: "succeeded"}
+    with (
+        patch.object(m0, "_read_vxm_mapping", return_value=mapping),
+        patch.object(m0, "_read_owner_result", return_value=statuses),
+    ):
+        actual_mapping, steps = m0._refresh_futures_owner(
+            config,
+            [_entry("futures", "ES_202506"), _entry("futures", "VXM_20250122")],
+            runner,
+            tmp_path,
+            lambda: None,
+        )
+    assert actual_mapping == mapping
+    assert [(step["symbol"], step["status"]) for step in steps] == list(statuses.items())
 
 
 @pytest.mark.parametrize("failure", ["mutated_failed_predecessor", "mapping_absent"])

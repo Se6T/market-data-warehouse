@@ -612,8 +612,9 @@ def test_refresh_lock_rejects_filesystem_aliases_before_inventory(
     assert outside.read_text() == "outside"
 
 
+@pytest.mark.parametrize("ordinary_futures_status", ["succeeded", "failed"])
 def test_dynamic_vxm_bootstraps_before_inventory_and_publishes_exact_mapping(
-    tmp_path: Path,
+    tmp_path: Path, ordinary_futures_status: str,
 ) -> None:
     warehouse = _warehouse(tmp_path)
     config = _config(tmp_path, warehouse)
@@ -666,10 +667,20 @@ def test_dynamic_vxm_bootstraps_before_inventory_and_publishes_exact_mapping(
                     "asset_class": "futures",
                     "requested_symbols": symbols,
                     "results": [
-                        {"symbol": symbol, "status": "succeeded"} for symbol in symbols
+                        {
+                            "symbol": symbol,
+                            "status": (
+                                ordinary_futures_status
+                                if symbol == "ES_202506"
+                                else "succeeded"
+                            ),
+                        }
+                        for symbol in symbols
                     ],
                 }))
-            return subprocess.CompletedProcess(argv, 0, "ok", "")
+            return subprocess.CompletedProcess(
+                argv, 0 if ordinary_futures_status == "succeeded" else 1, "ok", ""
+            )
         return _owner_completed(argv)
 
     manifest = m0.refresh_all_and_rebuild(
@@ -684,6 +695,9 @@ def test_dynamic_vxm_bootstraps_before_inventory_and_publishes_exact_mapping(
     ]
     assert len(calls) == 4
     assert futures_results == [["ES_202506", "VXM_20250219"]]
+    assert manifest["outcome"] == (
+        "succeeded" if ordinary_futures_status == "succeeded" else "degraded"
+    )
     assert manifest["current_futures_contracts"] == {
         "VXM": {
             "as_of": "2025-01-02", "con_id": 456,
@@ -702,7 +716,7 @@ def test_dynamic_vxm_bootstraps_before_inventory_and_publishes_exact_mapping(
     assert [(step["asset_class"], step["symbol"], step["status"]) for step in manifest["steps"]] == [
         ("crypto", "BTC", "succeeded"),
         ("equity", "AAPL", "succeeded"),
-        ("futures", "ES_202506", "succeeded"),
+        ("futures", "ES_202506", ordinary_futures_status),
         ("futures", "VXM_20250219", "succeeded"),
         ("volatility", "VIX", "succeeded"),
     ]
