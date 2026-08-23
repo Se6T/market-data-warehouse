@@ -99,12 +99,31 @@ class TestBarsToTable:
     def test_normalizes_reported_high_low_envelope(self):
         table = bars_to_table(
             "VIX",
-            [{"date": "1992-02-11", "open": "19.24", "high": "18.57",
+            [{"date": "2001-02-09", "open": "19.24", "high": "18.57",
               "low": "17.61", "close": "17.70", "volume": "0"}],
         )
         row = table.to_pylist()[0]
         assert row["high"] == 19.24
         assert row["low"] == 17.61
+
+    def test_coverage_start_clamps_pre_hole_history(self):
+        """Bars before the symbol's coverage start are dropped."""
+        bars = [
+            {"date": "1999-12-31", "open": "19.24", "high": "19.24",
+             "low": "17.61", "close": "17.70", "volume": "0"},
+            {"date": "2000-01-03", "open": "20.0", "high": "21.0",
+             "low": "19.5", "close": "20.5", "volume": "0"},
+        ]
+        table = bars_to_table("VIX", bars)
+        assert table.num_rows == 1
+        assert table.column("trade_date")[0].as_py().isoformat() == "2000-01-03"
+
+    def test_all_bars_before_coverage_start_returns_none(self):
+        assert bars_to_table(
+            "VIX",
+            [{"date": "1992-02-11", "open": "19.24", "high": "18.57",
+              "low": "17.61", "close": "17.70", "volume": "0"}],
+        ) is None
 
     def test_empty_bars_returns_none(self):
         """Empty bars list returns None."""

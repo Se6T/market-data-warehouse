@@ -33,6 +33,19 @@ console = Console()
 
 CBOE_HISTORICAL_URL = "https://cdn.cboe.com/api/global/delayed_quotes/charts/historical/_{symbol}.json"
 
+# CBOE's public history for these indices has unrecoverable source-side holes
+# (days the index simply did not publish) before these dates. Bronze coverage
+# is clamped to the first complete-coverage session on/after this date so the
+# merge path can never re-introduce the pre-clamp holes.
+COVERAGE_STARTS: dict[str, str] = {
+    "VIX": "2000-01-03",
+    "VVIX": "2013-05-14",
+    "COR3M": "2020-11-18",
+    "OVX": "2020-10-19",
+    "RVX": "2020-10-19",
+    "VXEEM": "2020-10-19",
+}
+
 DEFAULT_WAREHOUSE = Path.home() / "market-warehouse"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_PRESET = SCRIPT_DIR.parent / "presets" / "volatility.json"
@@ -92,6 +105,14 @@ def bars_to_table(symbol: str, bars: list[dict[str, Any]]) -> pa.Table:
     
     symbol_id = _symbol_id(symbol)
     
+    coverage_start = COVERAGE_STARTS.get(symbol)
+    if coverage_start is not None:
+        clamp = date.fromisoformat(coverage_start)
+        bars = [bar for bar in bars if date.fromisoformat(bar["date"]) >= clamp]
+        if not bars:
+            console.print(f"  {symbol}: no bars on/after coverage start {coverage_start}")
+            return None
+    
     records = []
     for bar in bars:
         open_price = float(bar["open"])
@@ -136,6 +157,20 @@ def write_bronze_parquet(
     # Merge with existing data if present
     if parquet_path.exists():
         existing = pq.ParquetFile(parquet_path).read()
+
+        coverage_start = COVERAGE_STARTS.get(symbol)
+        if coverage_start is not None:
+            clamp = date.fromisoformat(coverage_start)
+            clamped_dates = pa.array([clamp], type=pa.date32())
+            kept_mask = pc.greater_equal(existing.column("trade_date"), clamped_dates[0])
+            kept_rows = pc.sum(kept_mask).as_py() or 0
+            dropped_rows = existing.num_rows - kept_rows
+            if dropped_rows > 0:
+                existing = existing.filter(kept_mask)
+                console.print(
+                    f"  {symbol}: dropped {dropped_rows} pre-coverage rows "
+                    f"(coverage starts {coverage_start})"
+                )
 
         # Normalize existing schema to match expected columns (handles schema drift)
         expected_columns = table.column_names
