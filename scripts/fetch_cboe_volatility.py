@@ -184,6 +184,7 @@ def write_bronze_parquet(
     # Merge with existing data if present
     if parquet_path.exists():
         existing = pq.ParquetFile(parquet_path).read()
+        rows_dropped = 0
 
         coverage_start = COVERAGE_STARTS.get(symbol)
         if coverage_start is not None:
@@ -194,6 +195,7 @@ def write_bronze_parquet(
             dropped_rows = existing.num_rows - kept_rows
             if dropped_rows > 0:
                 existing = existing.filter(kept_mask)
+                rows_dropped += dropped_rows
                 console.print(
                     f"  {symbol}: dropped {dropped_rows} pre-coverage rows "
                     f"(coverage starts {coverage_start})"
@@ -202,21 +204,16 @@ def write_bronze_parquet(
         # Drop holiday bars that CBOE published but the canonical session
         # calendar does not recognize (see _is_canonical_session).
         existing_dates_list = existing.column("trade_date").to_pylist()
-        non_session_rows = [
-            i
-            for i, day in enumerate(existing_dates_list)
-            if not _is_canonical_session(day.isoformat())
+        session_flags = [
+            _is_canonical_session(day.isoformat()) for day in existing_dates_list
         ]
-        if non_session_rows:
-            session_mask = pc.invert(
-                pa.array(
-                    [i in non_session_rows for i in range(existing.num_rows)],
-                    type=pa.bool_(),
-                )
-            )
+        if not all(session_flags):
+            session_mask = pa.array(session_flags, type=pa.bool_())
+            non_session_count = existing.num_rows - (pc.sum(session_mask).as_py() or 0)
             existing = existing.filter(session_mask)
+            rows_dropped += non_session_count
             console.print(
-                f"  {symbol}: dropped {len(non_session_rows)} non-session rows"
+                f"  {symbol}: dropped {non_session_count} non-session rows"
             )
 
         # Normalize existing schema to match expected columns (handles schema drift)
@@ -274,7 +271,7 @@ def write_bronze_parquet(
         if new_rows.num_rows > 0:
             table = pa.concat_tables([existing, new_rows])
             console.print(f"  {symbol}: merged {new_rows.num_rows} new rows with {existing.num_rows} existing")
-        elif extra_cols or identity_changed or envelope_changed:
+        elif extra_cols or identity_changed or envelope_changed or rows_dropped > 0:
             # Rewrite stale schema/identity metadata even without new data.
             table = existing
             console.print(f"  {symbol}: rewriting canonical metadata")
