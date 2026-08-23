@@ -15,6 +15,7 @@ from rich.console import Console
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 from clients.bronze_client import BronzeClient  # noqa: E402
+from scripts._refresh_result import write_result  # noqa: E402
 
 console = Console()
 DEFAULT_WAREHOUSE = Path.home() / "market-warehouse"
@@ -102,10 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warehouse", type=Path, default=DEFAULT_WAREHOUSE)
     parser.add_argument("--limit", type=int, default=1000)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--result-json", type=Path)
     return parser
 
 
-def main() -> None:
+def main() -> int:
     args = build_parser().parse_args()
     if not 253 <= args.limit <= 1000:
         raise ValueError("--limit must cover the 252-day momentum lookback and be <=1000")
@@ -117,18 +119,28 @@ def main() -> None:
     unknown = sorted(set(symbols) - set(SYMBOL_TO_BINANCE))
     if unknown:
         raise ValueError(f"unknown major crypto symbols: {unknown}")
+    statuses = {symbol: "failed" for symbol in symbols}
     for symbol in symbols:
-        payload = fetch_klines(
-            SYMBOL_TO_BINANCE[symbol], end=args.end, limit=args.limit, base_url=args.base_url
-        )
-        rows = klines_to_rows(payload, end=args.end)
-        if len(rows) < 253:
-            raise RuntimeError(f"{symbol}: only {len(rows)} completed daily rows")
-        inserted = write_rows(symbol, rows, args.warehouse)
-        console.print(
-            f"{symbol}: rows={len(rows)} inserted={inserted} "
-            f"range={rows[0]['trade_date']}..{rows[-1]['trade_date']}"
-        )
+        try:
+            payload = fetch_klines(
+                SYMBOL_TO_BINANCE[symbol], end=args.end, limit=args.limit, base_url=args.base_url
+            )
+            rows = klines_to_rows(payload, end=args.end)
+            if len(rows) < 253:
+                raise RuntimeError(f"{symbol}: only {len(rows)} completed daily rows")
+            inserted = write_rows(symbol, rows, args.warehouse)
+            console.print(
+                f"{symbol}: rows={len(rows)} inserted={inserted} "
+                f"range={rows[0]['trade_date']}..{rows[-1]['trade_date']}"
+            )
+            statuses[symbol] = "succeeded"
+        except Exception:
+            if args.result_json is None:
+                raise
+            console.print(f"{symbol}: failed")
+    if args.result_json is not None:
+        write_result(args.result_json, "crypto", symbols, statuses)
+    return 0 if all(status == "succeeded" for status in statuses.values()) else 1
 
 
 from scripts._entrypoint import run_main

@@ -249,20 +249,41 @@ python scripts/refresh_all_and_rebuild.py \
 ```
 
 The stable database authority is normalized to the immutable-generation-backed
-`duckdb/current/market.duckdb` bundle. The pre-refresh inventory is written to
-`duckdb/pre-refresh-inventory.json` unless `--inventory-path` is explicitly supplied.
+`duckdb/current/market.duckdb` bundle. By default, each pre-refresh inventory is
+written create-only to
+`duckdb/inventories/pre-refresh-<as-of>-<uuid>.json`; `--inventory-path` may
+instead supply an explicit create-only path.
 
 It inventories and hashes every canonical physical Parquet file before source
-access, refreshes each identity through its owner-specific pipeline, rejects
-identity/date/schema drift, builds all asset classes together in a temporary
-DuckDB, validates exact schemas/types/indexes/constraints and per-identity
-counts/latest sessions, fsyncs an immutable versioned generation, and atomically
-promotes the `current` symlink as the only commit point. Stable readers call
-`resolve_current_bundle()` once and use both returned generation paths. No
-failed or interrupted run can expose a mismatched database/manifest pair; a
-pre-promotion SIGKILL can leave only an unreachable generation. The manifest contains source commit/tree,
-per-step status, pre/post inventories, physical schemas and schema hashes,
-latest sessions, row counts, and the published database SHA-256.
+access, then invokes each non-empty asset-class owner at most once with a
+bounded result artifact carrying one exact terminal status per requested
+identity (except explicitly preserved broker assets). A nonzero owner exit or
+ordinary owner exception is recorded as failed identity evidence without
+stopping unrelated identities or later asset classes. One composite PAPER-only
+futures owner refreshes ordinary futures and dynamically bootstraps/rolls VXM
+before inventory freeze; prior dated VXM contracts remain immutable historical
+identities. Owner subprocesses receive an exact allowlisted environment, while
+provider and `127.0.0.1:4002` PAPER routing are carried in sealed argv. An
+initial VXM failure with no valid predecessor is fatal and cannot publish a
+degraded generation. It can publish a `degraded` generation only when every failed
+identity still has the exact pre-refresh valid Parquet data, and every identity
+has a valid schema/identity, non-regressing row count/latest session, and no
+session later than the requested as-of date. Successful identities must still
+meet their normal freshness requirements. Any changed, removed, malformed, or
+regressed failed identity—or any global validation/publication fault—publishes
+nothing and returns failure.
+
+It builds all asset classes together in a temporary DuckDB, validates exact
+schemas/types/indexes/constraints and per-identity counts/latest sessions,
+fsyncs an immutable versioned generation, and atomically promotes the `current`
+symlink as the only commit point. Stable readers call `resolve_current_bundle()`
+once and use both returned generation paths. No failed or interrupted run can
+expose a mismatched database/manifest pair; a pre-promotion SIGKILL can leave
+only an unreachable generation. The manifest and embedded `run_result` record
+the `succeeded` or `degraded` outcome, complete per-step status, and a
+non-sensitive canonical list of failed identities, alongside source commit/tree,
+pre/post inventories, physical schemas and schema hashes, latest sessions, row
+counts, and the published database SHA-256.
 
 ### Futures preset format
 

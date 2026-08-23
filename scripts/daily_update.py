@@ -38,6 +38,7 @@ import sys
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Sequence
 
 from ib_insync import Future, Index, Stock
 from rich.console import Console
@@ -51,6 +52,7 @@ from clients.bronze_client import BronzeClient
 from clients.daily_bar_fallback import DailyBarFallbackClient
 from clients.ib_client import IBClient, IBError
 from clients.historical_provider import create_ib_client_or_adapter
+from scripts._refresh_result import write_result
 
 _DEFAULT_STORAGE_CLIENT = BronzeClient
 DBClient = BronzeClient
@@ -510,7 +512,7 @@ def resolve_target_date(today: date, requested_target: str | None, force: bool) 
 # ── Main ───────────────────────────────────────────────────────────────
 
 
-def main():
+def main(argv: Sequence[str] | None = None):
     parser = argparse.ArgumentParser(description="Daily market data update")
     parser.add_argument(
         "--host", type=str,
@@ -521,6 +523,10 @@ def main():
         "--port", type=int,
         default=int(os.getenv("MDW_IB_PORT", "4001")),
         help="IB Gateway port (default: $MDW_IB_PORT or 4001)",
+    )
+    parser.add_argument(
+        "--provider", choices=["direct-ib"], default="direct-ib",
+        help="Historical provider authority (only direct-ib is accepted).",
     )
     parser.add_argument(
         "--max-concurrent", type=int, default=6,
@@ -554,7 +560,8 @@ def main():
         default="equity",
         help="Asset class to update (default: equity).",
     )
-    args = parser.parse_args()
+    parser.add_argument("--result-json", type=Path)
+    args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -576,8 +583,10 @@ def main():
 
     # ── Load preset filter (if any) ─────────────────────────────────
     preset_tickers: set[str] | None = None
+    requested_symbols: list[str] | None = None
     if args.preset:
         preset_name, preset_list = load_preset(args.preset)
+        requested_symbols = list(preset_list)
         preset_tickers = set(preset_list)
         console.print(f"[bold]Preset:[/bold] {preset_name} ({len(preset_tickers)} tickers)")
 
@@ -608,6 +617,12 @@ def main():
 
         if not need_update:
             console.print("\n[green bold]All tickers up to date.[/green bold]\n")
+            if args.result_json is not None:
+                symbols = requested_symbols or list(latest_dates)
+                write_result(
+                    args.result_json, asset_class, symbols,
+                    {symbol: "succeeded" for symbol in symbols},
+                )
             return 0
 
         if args.dry_run:
@@ -635,6 +650,11 @@ def main():
         fallback_attempts = 0
         fallback_successes = 0
         fallback_symbols = 0
+        symbols = requested_symbols or list(latest_dates)
+        statuses = {
+            symbol: ("succeeded" if symbol in up_to_date else "failed")
+            for symbol in symbols
+        }
 
         with create_ib_client_or_adapter(host=args.host, port=args.port) as ib, _fallback_client() as fallback:
             ib.connect(host=args.host, port=args.port)
@@ -673,9 +693,14 @@ def main():
                     if asset_class == "equity":
                         missing_dates = get_missing_trading_dates(latest, target, valid_bars)
                         fallback_attempts += len(missing_dates)
-                        fallback_bars, fallback_sources = fetch_fallback_bars(
-                            ticker, missing_dates, fallback,
-                        )
+                        try:
+                            fallback_bars, fallback_sources = fetch_fallback_bars(
+                                ticker, missing_dates, fallback,
+                            )
+                        except Exception:
+                            console.print(f"  [red]{ticker}: fallback failed[/red]")
+                            tickers_failed += 1
+                            continue
                         if fallback_bars:
                             recovered_bars, fallback_issues = validate_bars(fallback_bars, ticker, asset_class=asset_class)
                             total_issues.extend(fallback_issues)
@@ -710,9 +735,14 @@ def main():
                         rows = bars_to_futures_rows(valid_bars, symbol_id, root, expiry_date)
                     else:
                         rows = bars_to_rows(valid_bars, symbol_id)
-                    inserted = bronze.merge_ticker_rows(ticker, rows)
-                    if hasattr(bronze, "write_ticker_parquet"):
-                        bronze.write_ticker_parquet(ticker, symbol_id, bronze_dir)
+                    try:
+                        inserted = bronze.merge_ticker_rows(ticker, rows)
+                        if hasattr(bronze, "write_ticker_parquet"):
+                            bronze.write_ticker_parquet(ticker, symbol_id, bronze_dir)
+                    except Exception:
+                        console.print(f"  [red]{ticker}: publication failed[/red]")
+                        tickers_failed += 1
+                        continue
                     remaining_dates = get_missing_trading_dates(latest, target, valid_bars)
                     total_inserted += inserted
 
@@ -726,6 +756,7 @@ def main():
                         continue
 
                     tickers_updated += 1
+                    statuses[ticker] = "succeeded"
                     console.print(
                         f"  [green]{ticker}[/green]: {inserted} bar{'s' if inserted != 1 else ''} published"
                     )
@@ -748,6 +779,8 @@ def main():
         if len(total_issues) > 20:
             console.print(f"  ... and {len(total_issues) - 20} more")
     console.print()
+    if args.result_json is not None:
+        write_result(args.result_json, asset_class, symbols, statuses)
     return 1 if tickers_failed else 0
 
 

@@ -10,6 +10,7 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import duckdb
@@ -20,6 +21,7 @@ import pytest
 from clients.bronze_client import BronzeClient
 from clients.db_client import DBClient
 from clients.symbol_ids import stable_symbol_id
+from scripts import fetch_vxm_current as vxm
 from scripts import refresh_all_and_rebuild as m0
 
 
@@ -60,13 +62,80 @@ def _config(tmp_path: Path, warehouse: Path) -> m0.RefreshConfig:
         as_of=date(2025, 1, 2),
         python=Path("/safe/python"),
         repo_root=Path(__file__).resolve().parents[1],
+        bootstrap_current_vxm=False,
+    )
+
+
+def _owner_request(argv: list[str]) -> tuple[Path, str, list[str]]:
+    result_path = Path(argv[argv.index("--result-json") + 1])
+    if "refresh_futures_batch.py" in " ".join(argv):
+        preset = json.loads(Path(argv[argv.index("--preset") + 1]).read_text())
+        ordinary = [
+            f"{item['root']}_{item['expiry']}" for item in preset["contracts"]
+        ]
+        prior_start = argv.index("--prior-vxm-symbols") + 1
+        asset_class = "futures"
+        symbols = [*ordinary, *argv[prior_start:]]
+    elif "--asset-class" in argv:
+        asset_class = argv[argv.index("--asset-class") + 1]
+        preset = json.loads(Path(argv[argv.index("--preset") + 1]).read_text())
+        symbols = (
+            [f"{item['root']}_{item['expiry']}" for item in preset["contracts"]]
+            if "contracts" in preset
+            else preset["tickers"]
+        )
+    else:
+        asset_class = "crypto" if "fetch_binance_crypto.py" in " ".join(argv) else "volatility"
+        start = argv.index("--symbols") + 1
+        end = min(
+            (
+                argv.index(flag)
+                for flag in ("--end", "--warehouse", "--result-json")
+                if flag in argv and argv.index(flag) > start
+            ),
+            default=len(argv),
+        )
+        symbols = argv[start:end]
+    return result_path, asset_class, symbols
+
+
+def _owner_completed(
+    argv: list[str],
+    *,
+    failed: frozenset[str] = frozenset(),
+    args: list[str] | None = None,
+    stdout: str = "ok",
+    stderr: str = "",
+) -> subprocess.CompletedProcess[str]:
+    result_path, asset_class, symbols = _owner_request(argv)
+    statuses = {
+        symbol: "failed" if symbol in failed else "succeeded" for symbol in symbols
+    }
+    result_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "asset_class": asset_class,
+                "requested_symbols": symbols,
+                "results": [
+                    {"symbol": symbol, "status": statuses[symbol]} for symbol in symbols
+                ],
+            }
+        )
+    )
+    return subprocess.CompletedProcess(
+        argv if args is None else args,
+        1 if failed else 0,
+        stdout,
+        stderr,
     )
 
 
 def _runner(calls: list[list[str]]):
     def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
         calls.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "ok", "")
+        return _owner_completed(argv)
+
     return run
 
 
@@ -162,6 +231,8 @@ def test_success_refreshes_each_identity_and_publishes_manifest(tmp_path: Path) 
     assert any("daily_update.py" in call and "--asset-class futures" in call for call in text)
     assert any("fetch_cboe_volatility.py" in call and "--symbols VIX" in call for call in text)
     assert any("fetch_binance_crypto.py" in call and "--symbols BTC" in call for call in text)
+    assert all(call.count("--result-json") == 1 for call in calls)
+    assert len({call[call.index("--result-json") + 1] for call in calls}) == 4
     assert config.db_path.read_bytes() != old
     sha = hashlib.sha256(config.db_path.read_bytes()).hexdigest()
     assert manifest["publication"] == {"db_path": str(config.db_path), "published": True, "sha256": sha}
@@ -199,7 +270,10 @@ def test_success_refreshes_each_identity_and_publishes_manifest(tmp_path: Path) 
     assert len(json.loads(config.inventory_path.read_text())["inventory"]) == 4
     run_result = manifest["run_result"]
     assert isinstance(run_result, dict)
+    assert manifest["outcome"] == "succeeded"
     assert run_result["outcome"] == "succeeded"
+    assert manifest["failed_identities"] == []
+    assert run_result["failed_identities"] == []
     assert [step["status"] for step in run_result["steps"]] == ["succeeded"] * 4
     assert len(run_result["run_id"]) == 32
     assert _run_result_paths(config) == []
@@ -429,19 +503,24 @@ def test_failure_evidence_fault_preserves_original_error_and_chains_audit_fault(
 ) -> None:
     config = _config(tmp_path, _warehouse(tmp_path))
     old = _seed_old_db(config)
-    owner_failure = TimeoutError("owner failed")
+    refresh_failure = TimeoutError("refresh failed")
     audit_failure = OSError("terminal evidence fsync failed")
 
+    def hook(phase: str) -> None:
+        if phase == "refresh":
+            raise refresh_failure
+
     with patch.object(m0, "_write_run_result", side_effect=audit_failure), pytest.raises(
-        TimeoutError, match="owner failed",
+        TimeoutError, match="refresh failed",
     ) as raised:
         m0.refresh_all_and_rebuild(
             config,
-            command_runner=lambda _argv: (_ for _ in ()).throw(owner_failure),
+            command_runner=_runner([]),
+            phase_hook=hook,
             source_identity=_identity,
         )
 
-    assert raised.value is owner_failure
+    assert raised.value is refresh_failure
     assert raised.value.__cause__ is audit_failure
     assert config.db_path.read_bytes() == old
 
@@ -533,6 +612,239 @@ def test_refresh_lock_rejects_filesystem_aliases_before_inventory(
     assert outside.read_text() == "outside"
 
 
+@pytest.mark.parametrize("ordinary_futures_status", ["succeeded", "failed"])
+def test_dynamic_vxm_bootstraps_before_inventory_and_publishes_exact_mapping(
+    tmp_path: Path, ordinary_futures_status: str,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    config = _config(tmp_path, warehouse)
+    object.__setattr__(config, "bootstrap_current_vxm", True)
+    calls: list[list[str]] = []
+    futures_results: list[list[str]] = []
+
+    class FakeIB:
+        def connect(self, *_args, **_kwargs):
+            return None
+
+        def reqContractDetails(self, _request):
+            contract = SimpleNamespace(
+                symbol="VXM", localSymbol="VXMG5", secType="FUT", exchange="CFE",
+                currency="USD", tradingClass="VXM", multiplier="100", conId=456,
+                lastTradeDateOrContractMonth="20250219",
+            )
+            return [SimpleNamespace(contract=contract)]
+
+        def reqHistoricalData(self, _contract, **_kwargs):
+            return [SimpleNamespace(
+                date="2025-01-02", open=18, high=19, low=17, close=18.5, volume=50,
+            )]
+
+        def disconnect(self):
+            return None
+
+    def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        command = " ".join(argv)
+        if "fetch_vxm_current.py" in command or "refresh_futures_batch.py" in command:
+            vxm.refresh_current_vxm(
+                warehouse=warehouse,
+                as_of=config.as_of,
+                result_json=Path(argv[argv.index("--result-json") + 1]),
+                mapping_json=Path(argv[argv.index("--mapping-json") + 1]),
+                roll_days=int(argv[argv.index("--roll-days") + 1]),
+                host=argv[argv.index("--host") + 1],
+                port=int(argv[argv.index("--port") + 1]),
+                ib_factory=FakeIB,
+            )
+            if "refresh_futures_batch.py" in command:
+                preset = json.loads(Path(argv[argv.index("--preset") + 1]).read_text())
+                symbols = [
+                    f"{item['root']}_{item['expiry']}" for item in preset["contracts"]
+                ] + ["VXM_20250219"]
+                futures_results.append(symbols)
+                Path(argv[argv.index("--result-json") + 1]).write_text(json.dumps({
+                    "schema_version": 1,
+                    "asset_class": "futures",
+                    "requested_symbols": symbols,
+                    "results": [
+                        {
+                            "symbol": symbol,
+                            "status": (
+                                ordinary_futures_status
+                                if symbol == "ES_202506"
+                                else "succeeded"
+                            ),
+                        }
+                        for symbol in symbols
+                    ],
+                }))
+            return subprocess.CompletedProcess(
+                argv, 0 if ordinary_futures_status == "succeeded" else 1, "ok", ""
+            )
+        return _owner_completed(argv)
+
+    manifest = m0.refresh_all_and_rebuild(
+        config, command_runner=run, source_identity=_identity,
+    )
+
+    futures_calls = [call for call in calls if "futures" in " ".join(call)]
+    assert len(futures_calls) == 1
+    assert "refresh_futures_batch.py" in " ".join(futures_calls[0])
+    assert [futures_calls[0][futures_calls[0].index(flag) + 1] for flag in ("--host", "--port")] == [
+        "127.0.0.1", "4002",
+    ]
+    assert len(calls) == 4
+    assert futures_results == [["ES_202506", "VXM_20250219"]]
+    assert manifest["outcome"] == (
+        "succeeded" if ordinary_futures_status == "succeeded" else "degraded"
+    )
+    assert manifest["current_futures_contracts"] == {
+        "VXM": {
+            "as_of": "2025-01-02", "con_id": 456,
+            "contract_id": stable_symbol_id("VXM_20250219"), "currency": "USD",
+            "exchange": "CFE", "expiry_date": "2025-02-19",
+            "latest_session": "2025-01-02", "local_symbol": "VXMG5",
+            "multiplier": "100", "roll_days": 5, "root": "VXM",
+            "schema_version": 1, "sec_type": "FUT", "symbol": "VXM_20250219",
+            "trading_class": "VXM",
+        }
+    }
+    frozen = json.loads(config.inventory_path.read_text())["inventory"]
+    assert ("futures", "VXM_20250219") in {
+        (item["asset_class"], item["symbol"]) for item in frozen
+    }
+    assert [(step["asset_class"], step["symbol"], step["status"]) for step in manifest["steps"]] == [
+        ("crypto", "BTC", "succeeded"),
+        ("equity", "AAPL", "succeeded"),
+        ("futures", "ES_202506", ordinary_futures_status),
+        ("futures", "VXM_20250219", "succeeded"),
+        ("volatility", "VIX", "succeeded"),
+    ]
+    assert manifest["row_counts"]["md.futures_daily"] == 2
+
+
+def test_dynamic_vxm_failure_preserves_identity_and_continues_other_classes(
+    tmp_path: Path,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    config = _config(tmp_path, warehouse)
+    object.__setattr__(config, "bootstrap_current_vxm", True)
+    prior_vxm = warehouse / (
+        "data-lake/bronze/asset_class=futures/"
+        "symbol=VXM_20250219/data.parquet"
+    )
+    prior_vxm.parent.mkdir(parents=True)
+    vxm_row = _futures_row("2025-01-02")
+    vxm_row.update({"root_symbol": "VXM", "expiry_date": "2025-02-19"})
+    with BronzeClient(prior_vxm.parent.parent, asset_class="futures") as client:
+        client.replace_ticker_rows("VXM_20250219", [vxm_row])
+    prior_bytes = prior_vxm.read_bytes()
+    calls: list[list[str]] = []
+
+    def fail_vxm_only(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if "refresh_futures_batch.py" in " ".join(argv):
+            return _owner_completed(argv, failed=frozenset({"VXM_20250219"}))
+        return _owner_completed(argv)
+
+    manifest = m0.refresh_all_and_rebuild(
+        config, command_runner=fail_vxm_only, source_identity=_identity,
+    )
+
+    assert prior_vxm.read_bytes() == prior_bytes
+    assert manifest["outcome"] == "degraded"
+    assert manifest["failed_identities"] == [
+        {
+            "asset_class": "futures",
+            "symbol": "VXM_20250219",
+            "status": "failed",
+        }
+    ]
+    assert len(calls) == 4
+    assert config.inventory_path.exists()
+    assert b"SECRET" not in json.dumps(manifest, sort_keys=True).encode()
+
+
+def test_initial_dynamic_vxm_failure_without_predecessor_publishes_nothing(
+    tmp_path: Path,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    config = _config(tmp_path, warehouse)
+    object.__setattr__(config, "bootstrap_current_vxm", True)
+    old = _seed_old_db(config)
+
+    def fail_futures(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        command = " ".join(argv)
+        if (
+            "fetch_vxm_current.py" in command
+            or "refresh_futures_batch.py" in command
+            or ("--asset-class" in argv and argv[argv.index("--asset-class") + 1] == "futures")
+        ):
+            return subprocess.CompletedProcess(argv, 1, "SECRET", "SECRET")
+        return _owner_completed(argv)
+
+    with pytest.raises(m0.RefreshFailure, match="no preservable VXM predecessor"):
+        m0.refresh_all_and_rebuild(
+            config, command_runner=fail_futures, source_identity=_identity,
+        )
+
+    assert config.db_path.read_bytes() == old
+    assert not any(
+        entry.asset_class == "futures" and entry.symbol.startswith("VXM_")
+        for entry in m0.discover_inventory(
+            warehouse / "data-lake" / "bronze", require_all_asset_classes=False,
+        )
+    )
+    [result_path] = _run_result_paths(config)
+    result = json.loads(result_path.read_text())
+    assert result["outcome"] == "failed"
+    assert result["failure_type"] == "RefreshFailure"
+    assert b"SECRET" not in result_path.read_bytes()
+
+
+def test_dynamic_vxm_failed_partial_mutation_blocks_publication_after_other_classes(
+    tmp_path: Path,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    config = _config(tmp_path, warehouse)
+    object.__setattr__(config, "bootstrap_current_vxm", True)
+    old = _seed_old_db(config)
+    calls: list[list[str]] = []
+
+    def mutate_then_fail(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if "refresh_futures_batch.py" in " ".join(argv):
+            target = next(
+                warehouse.glob(
+                    "data-lake/bronze/asset_class=futures/symbol=*/data.parquet"
+                )
+            )
+            target.write_bytes(target.read_bytes() + b"unsafe")
+            return subprocess.CompletedProcess(argv, 1, "SECRET", "SECRET")
+        return _owner_completed(argv)
+
+    with pytest.raises(m0.RefreshFailure, match="dynamic VXM owner mutated bronze"):
+        m0.refresh_all_and_rebuild(
+            config, command_runner=mutate_then_fail, source_identity=_identity,
+        )
+
+    assert len(calls) == 1
+    assert config.db_path.read_bytes() == old
+    [result_path] = _run_result_paths(config)
+    assert json.loads(result_path.read_text())["outcome"] == "failed"
+    assert b"SECRET" not in result_path.read_bytes()
+
+
+def test_production_presets_do_not_pin_a_vxm_expiry() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    for path in repo.joinpath("presets").glob("*.json"):
+        document = json.loads(path.read_text())
+        assert not any(
+            item.get("root") == "VXM" and bool(item.get("expiry"))
+            for item in document.get("contracts", [])
+        ), path
+
+
 def test_futures_refresh_uses_the_owner_preset_contract(tmp_path: Path) -> None:
     config = _config(tmp_path, _warehouse(tmp_path))
     entry = next(
@@ -541,12 +853,68 @@ def test_futures_refresh_uses_the_owner_preset_contract(tmp_path: Path) -> None:
         if item.asset_class == "futures"
     )
     preset = tmp_path / "futures.json"
-    argv = m0._update_argv(config, entry, preset)
+    argv = m0._futures_owner_argv(
+        config, [entry], preset, tmp_path / "result.json", tmp_path / "mapping.json",
+    )
     assert argv[argv.index("--preset") + 1] == str(preset)
     assert json.loads(preset.read_text()) == {
         "contracts": [{"expiry": "202506", "root": "ES"}],
-        "name": "m0-futures-ES_202506",
+        "name": "m0-futures-batch",
     }
+    assert "refresh_futures_batch.py" in " ".join(argv)
+    assert [argv[argv.index(flag) + 1] for flag in ("--provider", "--host", "--port")] == [
+        "direct-ib", "127.0.0.1", "4002",
+    ]
+
+
+def test_refresh_batches_multiple_identities_into_one_owner_invocation_per_class(
+    tmp_path: Path,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    equity_root = warehouse / "data-lake/bronze/asset_class=equity"
+    with BronzeClient(equity_root, asset_class="equity") as client:
+        client.replace_ticker_rows("MSFT", [_daily_row("2025-01-02", 200)])
+    calls: list[list[str]] = []
+
+    manifest = m0.refresh_all_and_rebuild(
+        _config(tmp_path, warehouse), command_runner=_runner(calls), source_identity=_identity,
+    )
+
+    assert len(calls) == 4
+    equity_call = next(call for call in calls if "--asset-class" in call and call[call.index("--asset-class") + 1] == "equity")
+    assert equity_call.count("--preset") == 1
+    assert [(step["symbol"], step["status"]) for step in manifest["steps"] if step["asset_class"] == "equity"] == [
+        ("AAPL", "succeeded"), ("MSFT", "succeeded")
+    ]
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {},
+        {"schema_version": 2, "asset_class": "equity", "requested_symbols": ["AAPL"], "results": [{"symbol": "AAPL", "status": "succeeded"}]},
+        {"schema_version": 1, "asset_class": "crypto", "requested_symbols": ["AAPL"], "results": [{"symbol": "AAPL", "status": "succeeded"}]},
+        {"schema_version": 1, "asset_class": "equity", "requested_symbols": ["AAPL", "AAPL"], "results": [{"symbol": "AAPL", "status": "succeeded"}]},
+        {"schema_version": 1, "asset_class": "equity", "requested_symbols": ["AAPL"], "results": [{"symbol": "AAPL", "status": "succeeded"}, {"symbol": "AAPL", "status": "failed"}]},
+        {"schema_version": 1, "asset_class": "equity", "requested_symbols": ["MSFT"], "results": [{"symbol": "MSFT", "status": "succeeded"}]},
+        {"schema_version": 1, "asset_class": "equity", "requested_symbols": ["AAPL"], "results": [{"symbol": "AAPL", "status": "unknown"}]},
+        {"schema_version": 1, "asset_class": "equity", "requested_symbols": ["AAPL"], "results": [{"symbol": "AAPL", "status": "failed", "error": "SECRET"}]},
+    ],
+)
+def test_owner_result_validation_rejects_malformed_or_nonexact_evidence(
+    tmp_path: Path, document: dict,
+) -> None:
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(document))
+    with pytest.raises(m0.RefreshFailure, match="owner result"):
+        m0._read_owner_result(path, "equity", ["AAPL"])
+
+
+def test_owner_result_validation_rejects_oversized_artifact(tmp_path: Path) -> None:
+    path = tmp_path / "result.json"
+    path.write_bytes(b" " * (m0.MAX_OWNER_RESULT_BYTES + 1))
+    with pytest.raises(m0.RefreshFailure, match="owner result"):
+        m0._read_owner_result(path, "equity", ["AAPL"])
 
 
 @pytest.mark.parametrize("phase", ["inventory", "refresh", "rebuild", "validation"])
@@ -562,74 +930,183 @@ def test_failure_after_each_phase_preserves_db(tmp_path: Path, phase: str) -> No
     assert not list(config.db_path.parent.glob(".market.duckdb.*.tmp"))
 
 
-def test_update_failure_and_inventory_drift_preserve_db(tmp_path: Path) -> None:
+@pytest.mark.parametrize("failure_ordinal", [0, 2])
+def test_owner_failure_isolated_in_canonical_order_and_publishes_degraded_bundle(
+    tmp_path: Path, failure_ordinal: int,
+) -> None:
     warehouse = _warehouse(tmp_path)
     config = _config(tmp_path, warehouse)
     old = _seed_old_db(config)
+    calls: list[list[str]] = []
+
     def fail(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        code = 7 if "fetch_cboe_volatility.py" in " ".join(argv) else 0
-        return subprocess.CompletedProcess(argv, code, "", "SECRET")
-    with pytest.raises(m0.RefreshFailure, match="volatility:VIX update failed with exit 7"):
-        m0.refresh_all_and_rebuild(config, command_runner=fail, source_identity=_identity)
-    assert config.db_path.read_bytes() == old
-    assert json.loads(config.manifest_path.read_text())["generation"] == "old"
-    [result_path] = _run_result_paths(config)
-    result_bytes = result_path.read_bytes()
-    result = json.loads(result_bytes)
-    assert result["outcome"] == "failed"
-    assert result["failure_type"] == "RefreshFailure"
-    assert [(step["asset_class"], step["symbol"], step["status"]) for step in result["steps"]] == [
-        ("crypto", "BTC", "succeeded"),
-        ("equity", "AAPL", "succeeded"),
-        ("futures", "ES_202506", "succeeded"),
-        ("volatility", "VIX", "failed"),
+        calls.append(argv)
+        should_fail = len(calls) - 1 == failure_ordinal
+        symbols = frozenset(_owner_request(argv)[2]) if should_fail else frozenset()
+        return _owner_completed(argv, failed=symbols, stderr="SECRET")
+
+    manifest = m0.refresh_all_and_rebuild(
+        config, command_runner=fail, source_identity=_identity,
+    )
+
+    expected = [
+        ("crypto", "BTC", "failed" if failure_ordinal == 0 else "succeeded"),
+        ("equity", "AAPL", "failed" if failure_ordinal == 1 else "succeeded"),
+        ("futures", "ES_202506", "failed" if failure_ordinal == 2 else "succeeded"),
+        ("volatility", "VIX", "failed" if failure_ordinal == 3 else "succeeded"),
     ]
-    assert b"SECRET" not in result_bytes
-
-    config.inventory_path.unlink()
-    calls = 0
-    def remove(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            (warehouse / "data-lake/bronze/asset_class=crypto/symbol=BTC/data.parquet").unlink()
-        return subprocess.CompletedProcess(argv, 0, "", "")
-    with pytest.raises(m0.RefreshFailure, match="inventory identities changed"):
-        m0.refresh_all_and_rebuild(config, command_runner=remove, source_identity=_identity)
-    assert config.db_path.read_bytes() == old
-    assert result_path.read_bytes() == result_bytes
-    assert len(_run_result_paths(config)) == 2
+    assert len(calls) == 4
+    assert [(step["asset_class"], step["symbol"], step["status"]) for step in manifest["steps"]] == expected
+    assert manifest["outcome"] == "degraded"
+    assert manifest["run_result"]["outcome"] == "degraded"
+    assert manifest["run_result"]["steps"] == manifest["steps"]
+    assert manifest["failed_identities"] == [
+        {"asset_class": expected[failure_ordinal][0], "symbol": expected[failure_ordinal][1], "status": "failed"}
+    ]
+    assert manifest["run_result"]["failed_identities"] == manifest["failed_identities"]
+    assert _run_result_paths(config) == []
+    assert config.db_path.read_bytes() != old
+    assert b"SECRET" not in config.manifest_path.read_bytes()
 
 
-def test_owner_exception_records_failed_and_not_attempted_identities(tmp_path: Path) -> None:
+def test_failed_identity_retains_prior_bronze_rows_in_degraded_duckdb(tmp_path: Path) -> None:
+    warehouse = _warehouse(tmp_path)
+    config = _config(tmp_path, warehouse)
+    object.__setattr__(config, "as_of", date(2025, 1, 3))
+
+    def update_except_failed_equity(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        if "--asset-class" in argv:
+            asset_class = argv[argv.index("--asset-class") + 1]
+            if asset_class == "equity":
+                return _owner_completed(
+                    argv, failed=frozenset({"AAPL"}), stderr="SECRET"
+                )
+            with BronzeClient(
+                warehouse / f"data-lake/bronze/asset_class={asset_class}",
+                asset_class=asset_class,
+            ) as client:
+                client.merge_ticker_rows("ES_202506", [_futures_row("2025-01-03")])
+        elif "fetch_binance_crypto.py" in " ".join(argv):
+            with BronzeClient(
+                warehouse / "data-lake/bronze/asset_class=crypto", asset_class="crypto",
+            ) as client:
+                client.merge_ticker_rows("BTC", [_daily_row("2025-01-03", 91000)])
+        else:
+            with BronzeClient(
+                warehouse / "data-lake/bronze/asset_class=volatility", asset_class="volatility",
+            ) as client:
+                client.merge_ticker_rows("VIX", [_daily_row("2025-01-03", 21)])
+        return _owner_completed(argv)
+
+    manifest = m0.refresh_all_and_rebuild(
+        config, command_runner=update_except_failed_equity, source_identity=_identity,
+    )
+
+    connection = duckdb.connect(str(config.db_path), read_only=True)
+    try:
+        assert connection.execute(
+            "SELECT e.close FROM md.equities_daily e JOIN md.symbols s USING (symbol_id) "
+            "WHERE s.asset_class='equity' AND s.symbol='AAPL'"
+        ).fetchall() == [(100.0,)]
+    finally:
+        connection.close()
+    assert manifest["latest_sessions"] == {
+        "crypto:BTC": "2025-01-03",
+        "equity:AAPL": "2025-01-02",
+        "futures:ES_202506": "2025-01-03",
+        "volatility:VIX": "2025-01-03",
+    }
+    assert manifest["failed_identities"] == [
+        {"asset_class": "equity", "symbol": "AAPL", "status": "failed"}
+    ]
+
+
+@pytest.mark.parametrize("failure_kind", ["exception", "timeout"])
+def test_owner_exception_or_timeout_isolated_as_failed_step_when_bronze_stays_valid(
+    tmp_path: Path, failure_kind: str,
+) -> None:
     config = _config(tmp_path, _warehouse(tmp_path))
-    old = _seed_old_db(config)
     calls = 0
 
     def fail_second(argv: list[str]) -> subprocess.CompletedProcess[str]:
         nonlocal calls
         calls += 1
         if calls == 2:
-            raise TimeoutError("SECRET child output")
-        return subprocess.CompletedProcess(argv, 0, "SECRET stdout", "SECRET stderr")
+            if failure_kind == "exception":
+                raise OSError("SECRET child output")
+            raise subprocess.TimeoutExpired(
+                argv, 3, output="SECRET stdout", stderr="SECRET stderr"
+            )
+        return _owner_completed(argv, stdout="SECRET stdout", stderr="SECRET stderr")
 
-    with pytest.raises(TimeoutError, match="SECRET child output"):
+    manifest = m0.refresh_all_and_rebuild(
+        config, command_runner=fail_second, source_identity=_identity,
+    )
+
+    assert calls == 4
+    assert [(step["asset_class"], step["symbol"], step["status"]) for step in manifest["steps"]] == [
+        ("crypto", "BTC", "succeeded"),
+        ("equity", "AAPL", "failed"),
+        ("futures", "ES_202506", "succeeded"),
+        ("volatility", "VIX", "succeeded"),
+    ]
+    assert manifest["outcome"] == "degraded"
+    assert b"SECRET" not in config.manifest_path.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "failure_kind", ["malformed", "removed", "regressed", "row_count", "changed"],
+)
+def test_failed_identity_integrity_violation_blocks_publication_after_all_attempts(
+    tmp_path: Path, failure_kind: str,
+) -> None:
+    warehouse = _warehouse(tmp_path)
+    config = _config(tmp_path, warehouse)
+    if failure_kind == "row_count":
+        with BronzeClient(
+            warehouse / "data-lake/bronze/asset_class=equity", asset_class="equity",
+        ) as client:
+            client.merge_ticker_rows("AAPL", [_daily_row("2025-01-01", 99)])
+    old = _seed_old_db(config)
+    calls = 0
+
+    def corrupt_failed_equity(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        if "--asset-class" in argv and argv[argv.index("--asset-class") + 1] == "equity":
+            path = warehouse / "data-lake/bronze/asset_class=equity/symbol=AAPL/data.parquet"
+            if failure_kind == "malformed":
+                path.write_bytes(b"not a parquet file")
+            elif failure_kind == "removed":
+                path.unlink()
+            else:
+                with BronzeClient(path.parent.parent, asset_class="equity") as client:
+                    day = "2025-01-01" if failure_kind == "regressed" else "2025-01-02"
+                    close = 101 if failure_kind == "changed" else 99
+                    client.replace_ticker_rows("AAPL", [_daily_row(day, close)])
+            return _owner_completed(
+                argv, failed=frozenset({"AAPL"}), stderr="SECRET"
+            )
+        return _owner_completed(argv)
+
+    with pytest.raises(Exception):
         m0.refresh_all_and_rebuild(
-            config, command_runner=fail_second, source_identity=_identity,
+            config, command_runner=corrupt_failed_equity, source_identity=_identity,
         )
 
+    assert calls == 4
     [result_path] = _run_result_paths(config)
     result_bytes = result_path.read_bytes()
     result = json.loads(result_bytes)
     assert [(step["asset_class"], step["symbol"], step["status"]) for step in result["steps"]] == [
         ("crypto", "BTC", "succeeded"),
         ("equity", "AAPL", "failed"),
-        ("futures", "ES_202506", "not_attempted"),
-        ("volatility", "VIX", "not_attempted"),
+        ("futures", "ES_202506", "succeeded"),
+        ("volatility", "VIX", "succeeded"),
     ]
+    assert result["outcome"] == "failed"
     assert b"SECRET" not in result_bytes
     assert config.db_path.read_bytes() == old
-    assert json.loads(config.manifest_path.read_text())["generation"] == "old"
 
 
 def test_zero_exit_noop_owner_cannot_publish_stale_identity(tmp_path: Path) -> None:
@@ -676,7 +1153,7 @@ def test_terminal_latest_session_is_fail_closed(tmp_path: Path, new_day: str, me
                     client.replace_ticker_rows("BTC", [_daily_row(new_day)])
                 else:
                     client.merge_ticker_rows("BTC", [_daily_row(new_day)])
-        return subprocess.CompletedProcess(argv, 0, "", "")
+        return _owner_completed(argv)
     with pytest.raises(m0.RefreshFailure, match=message):
         m0.refresh_all_and_rebuild(config, command_runner=mutate, source_identity=_identity)
     assert config.db_path.read_bytes() == old
@@ -794,7 +1271,9 @@ def test_inventory_rejects_corrupt_parquet(tmp_path: Path, corruption: str, mess
         m0.discover_inventory(warehouse / "data-lake" / "bronze")
 
 
-def test_source_identity_and_default_runner_capture_output(tmp_path: Path) -> None:
+def test_source_identity_and_default_runner_capture_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     completed = [
         subprocess.CompletedProcess(["git"], 0, "", ""),
         subprocess.CompletedProcess(["git"], 0, "commit-id\n", ""),
@@ -809,6 +1288,17 @@ def test_source_identity_and_default_runner_capture_output(tmp_path: Path) -> No
     assert all(call.kwargs["env"]["PATH"] == os.defpath for call in run.call_args_list)
     config = m0.RefreshConfig(tmp_path, tmp_path / "db", tmp_path / "manifest", tmp_path / "inventory", date(2025, 1, 2), Path("python"), tmp_path, 17)
     result = subprocess.CompletedProcess(["safe"], 0, "SECRET", "SECRET")
+    hostile = {
+        "MDW_IB_HOST": "live.invalid", "MDW_IB_PORT": "4001",
+        "MDW_RADON_API_URL": "https://remote.invalid", "MDW_API_KEY": "not-a-real-key",
+        "HTTP_PROXY": "http://proxy.invalid", "HTTPS_PROXY": "http://proxy.invalid",
+        "ALL_PROXY": "socks5://proxy.invalid", "NO_PROXY": "",
+        "PYTHONPATH": "/hostile", "PYTHONHOME": "/hostile",
+        "LD_PRELOAD": "/hostile.so", "DYLD_INSERT_LIBRARIES": "/hostile.dylib",
+        "VIRTUAL_ENV": "/hostile", "HOME": "/hostile", "AWS_SECRET_ACCESS_KEY": "fake",
+    }
+    for key, value in hostile.items():
+        monkeypatch.setenv(key, value)
     with patch.object(m0.subprocess, "run", return_value=result) as run:
         assert m0._default_runner(config)(["safe"]) is result
     kwargs = run.call_args.kwargs
@@ -819,9 +1309,10 @@ def test_source_identity_and_default_runner_capture_output(tmp_path: Path) -> No
         "text": True,
         "timeout": 17,
     }
-    assert kwargs["env"]["MDW_WAREHOUSE"] == str(tmp_path)
-    assert not any(key.startswith("PYTHON") for key in kwargs["env"])
-    assert not any(key.startswith(("LD_", "DYLD_")) for key in kwargs["env"])
+    assert kwargs["env"] == {
+        "MDW_WAREHOUSE": str(tmp_path),
+        "PATH": os.defpath,
+    }
 
 
 def test_owner_executes_sealed_committed_bytes_not_mutable_materialization(
@@ -853,7 +1344,9 @@ def test_owner_executes_sealed_committed_bytes_not_mutable_materialization(
             "crypto", "BTC", "unused", "0" * 64, 1, "2025-01-02", 1,
             ("trade_date:date32[day]",), "1" * 64,
         )
-        argv = m0._update_argv(config, entry, tmp_path / "preset.json")
+        argv = m0._update_argv(
+            config, [entry], tmp_path / "preset.json", tmp_path / "result.json",
+        )
         result = m0._default_runner(config)(argv)
 
     assert result.returncode == 0, result.stderr
@@ -899,7 +1392,9 @@ def test_owner_imports_dependencies_from_sealed_commit_not_materialized_tree(
             ("trade_date:date32[day]",), "1" * 64,
         )
         result = m0._default_runner(config)(
-            m0._update_argv(config, entry, tmp_path / "preset.json")
+            m0._update_argv(
+                config, [entry], tmp_path / "preset.json", tmp_path / "result.json",
+            )
         )
 
     assert result.returncode == 0, result.stderr
@@ -1283,8 +1778,8 @@ def test_refresh_rejects_completed_process_argv_mismatch(tmp_path: Path) -> None
     config = _config(tmp_path, _warehouse(tmp_path))
     old = _seed_old_db(config)
 
-    def mismatch(_argv: list[str]) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(["different"], 0, "", "")
+    def mismatch(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        return _owner_completed(argv, args=["different"])
 
     with pytest.raises(m0.RefreshFailure, match="reported argv mismatch"):
         m0.refresh_all_and_rebuild(

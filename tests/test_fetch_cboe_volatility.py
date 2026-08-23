@@ -445,3 +445,29 @@ class TestMain:
             patch("scripts.fetch_cboe_volatility.httpx.get", side_effect=Exception("network error")),
         ):
             assert main() == 1
+
+    def test_result_artifact_records_each_symbol_and_continues_after_failure(self, tmp_path):
+        result_path = tmp_path / "owner-result.json"
+        with (
+            patch("sys.argv", [
+                "prog", "--symbols", "BAD", "VIX", "--warehouse", str(tmp_path),
+                "--result-json", str(result_path),
+            ]),
+            patch(
+                "scripts.fetch_cboe_volatility.fetch_cboe_historical",
+                side_effect=[RuntimeError("SECRET"), self._SAMPLE_BARS],
+            ) as fetch,
+        ):
+            assert main() == 1
+
+        assert [item.args[0] for item in fetch.call_args_list] == ["BAD", "VIX"]
+        assert json.loads(result_path.read_text()) == {
+            "schema_version": 1,
+            "asset_class": "volatility",
+            "requested_symbols": ["BAD", "VIX"],
+            "results": [
+                {"symbol": "BAD", "status": "failed"},
+                {"symbol": "VIX", "status": "succeeded"},
+            ],
+        }
+        assert "SECRET" not in result_path.read_text()
