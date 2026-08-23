@@ -103,12 +103,15 @@ class DailyBarFallbackClient:
         trade_date: date,
         asset_class: str,
     ) -> FallbackDailyBar | None:
+        # The Nasdaq API returns rows newest-first, bounded by `limit`, with
+        # `fromdate` merely anchoring the oldest allowed date. To reach an
+        # older target date the request must page the full record count.
         payload = self._get_json(
             f"{_NASDAQ_BASE_URL}/{symbol}/historical",
             params={
                 "assetclass": asset_class,
                 "fromdate": trade_date.isoformat(),
-                "limit": "10",
+                "limit": "10000",
             },
         )
         if payload is None:
@@ -240,6 +243,8 @@ class DailyBarFallbackClient:
         if value is None:
             raise ValueError("missing integer field")
         cleaned = str(value).replace(",", "").strip()
+        if cleaned in {"N/A", "NA", "--", "-", ""}:
+            return 0
         return int(cleaned)
 
 
