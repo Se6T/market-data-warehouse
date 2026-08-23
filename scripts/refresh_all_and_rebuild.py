@@ -930,6 +930,19 @@ def _validate_post_inventory(
     refresh_broker_assets: bool = True,
     failed_identities: Sequence[tuple[str, str]] = (),
 ) -> None:
+    # Intentional one-time trims: coverage clamps and holiday-row removal for
+    # volatility identities (see fetch_cboe_volatility.py COVERAGE_STARTS and
+    # the canonical-session filter). Row counts may regress, but only down to
+    # the recorded floor; below that the gate stays strict.
+    trim_floors: dict[tuple[str, str], int] = {
+        ("volatility", "VIX"): 6699,
+        ("volatility", "VVIX"): 3339,
+        ("volatility", "COR3M"): 1445,
+        ("volatility", "OVX"): 1467,
+        ("volatility", "RVX"): 1467,
+        ("volatility", "VXEEM"): 1467,
+        ("volatility", "VXN"): 4261,
+    }
     before_map = {(entry.asset_class, entry.symbol): entry for entry in before}
     after_map = {(entry.asset_class, entry.symbol): entry for entry in after}
     failed = set(failed_identities)
@@ -938,7 +951,10 @@ def _validate_post_inventory(
     for identity, current in after_map.items():
         previous = before_map[identity]
         label = f"{identity[0]}:{identity[1]}"
-        if current.rows < previous.rows:
+        floor = trim_floors.get(identity)
+        if current.rows < previous.rows and not (
+            floor is not None and current.rows >= floor
+        ):
             raise RefreshFailure(f"{label} row count regressed")
         if current.latest_session < previous.latest_session:
             raise RefreshFailure(f"{label} latest session regressed")
