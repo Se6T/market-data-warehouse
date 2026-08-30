@@ -1,6 +1,6 @@
 {
   "name": "r2k-consumer-discretionary",
-  "description": "Russell 2000 Consumer Discretionary (196 companies)",
+  "description": "Russell 2000 Consumer Discretionary (195 companies)",
   "tickers": [
     "IBP",
     "TMHC",
@@ -64,7 +64,6 @@
     "SBH",
     "PTON",
     "FIGS",
-    "LEG",
     "LZB",
     "BRSL",
     "WWW",
@@ -325,7 +324,6 @@
       "FIGS"
     ],
     [
-      "LEG",
       "LZB"
     ],
     [
@@ -594,6 +592,6 @@
     ]
   ],
   "sector": "Consumer Discretionary",
-  "vol_driver": "Russell 2000 Consumer Discretionary \u2014 small-cap sector fundamentals",
+  "vol_driver": "Russell 2000 Consumer Discretionary — small-cap sector fundamentals",
   "source": "iShares Russell 2000 ETF (IWM) holdings"
 }

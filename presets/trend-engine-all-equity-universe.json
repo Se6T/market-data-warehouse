@@ -1,7 +1,7 @@
 {
   "name": "trend_engine_all_equity_universe",
   "description": "Union of current Russell 2000/IWM holdings and all other trend-engine equity inputs, excluding broker-confirmed inactive symbols.",
-  "assembled_on": "2026-08-20",
+  "assembled_on": "2026-08-30",
   "sources": [
     "russell-2000-current.json",
     "trend-engine-universe.json"
@@ -1107,7 +1107,6 @@
     "LCNB",
     "LDI",
     "LE",
-    "LEG",
     "LEGH",
     "LENZ",
     "LEU",
@@ -1593,7 +1592,6 @@
     "RLGT",
     "RLJ",
     "RM",
-    "RMAX",
     "RMBI",
     "RMBS",
     "RMNI",
@@ -1901,7 +1899,6 @@
     "TVRD",
     "TVTX",
     "TWI",
-    "TWO",
     "TWST",
     "TXG",
     "TXNM",

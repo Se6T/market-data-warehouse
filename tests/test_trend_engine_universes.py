@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -21,15 +22,20 @@ def test_current_russell_2000_preset_is_exact_sector_union() -> None:
     )
     sector_tickers: list[str] = []
     for path in sector_files:
-        sector_tickers.extend(_tickers(path.name))
+        tickers = _tickers(path.name)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        declared = re.search(r"\((\d+) companies\)", payload["description"])
+        assert declared is not None
+        assert int(declared.group(1)) == len(tickers)
+        sector_tickers.extend(tickers)
 
     current = _tickers("russell-2000-current.json")
 
     assert len(sector_files) == 11
-    assert len(sector_tickers) == len(set(sector_tickers)) == 1925
-    assert len(current) == len(set(current)) == 1925
+    assert len(sector_tickers) == len(set(sector_tickers)) == 1922
+    assert len(current) == len(set(current)) == 1922
     assert set(current) == set(sector_tickers)
-    assert {"MDV", "BBBY", "TALK"}.isdisjoint(current)
+    assert {"MDV", "BBBY", "TALK", "LEG", "RMAX", "TWO"}.isdisjoint(current)
 
 
 def test_trend_engine_equity_union_contains_russell_and_other_inputs_once() -> None:
@@ -39,4 +45,4 @@ def test_trend_engine_equity_union_contains_russell_and_other_inputs_once() -> N
 
     assert len(combined) == len(set(combined)) == len(set(russell) | set(other))
     assert set(combined) == set(russell) | set(other)
-    assert {"MDV", "BBBY", "TALK"}.isdisjoint(combined)
+    assert {"MDV", "BBBY", "TALK", "LEG", "RMAX", "TWO"}.isdisjoint(combined)
