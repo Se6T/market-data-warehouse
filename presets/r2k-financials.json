@@ -1,6 +1,6 @@
 {
   "name": "r2k-financials",
-  "description": "Russell 2000 Financials (413 companies)",
+  "description": "Russell 2000 Financials (412 companies)",
   "tickers": [
     "UMBF",
     "ONB",
@@ -155,7 +155,6 @@
     "MFA",
     "OCFC",
     "TMP",
-    "TWO",
     "TRUP",
     "BY",
     "OSBC",
@@ -722,8 +721,7 @@
       "OCFC"
     ],
     [
-      "TMP",
-      "TWO"
+      "TMP"
     ],
     [
       "TRUP",
@@ -1247,6 +1245,6 @@
     ]
   ],
   "sector": "Financials",
-  "vol_driver": "Russell 2000 Financials \u2014 small-cap sector fundamentals",
+  "vol_driver": "Russell 2000 Financials — small-cap sector fundamentals",
   "source": "iShares Russell 2000 ETF (IWM) holdings"
 }

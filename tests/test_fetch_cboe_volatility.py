@@ -139,6 +139,13 @@ class TestBarsToTable:
         dates = [d.isoformat() for d in table.column("trade_date").to_pylist()]
         assert dates == ["2021-04-01", "2021-04-05"]
 
+    def test_only_holiday_bars_returns_none(self):
+        assert bars_to_table(
+            "VXHYG",
+            [{"date": "2021-04-02", "open": "10.0", "high": "11.0",
+              "low": "9.0", "close": "10.5", "volume": "0"}],
+        ) is None
+
     def test_empty_bars_returns_none(self):
         """Empty bars list returns None."""
         assert bars_to_table("VXHYG", []) is None
@@ -150,6 +157,40 @@ def _read_single_parquet(path: Path):
 
 
 class TestWriteBronzeParquet:
+    def test_rewrites_existing_precoverage_and_holiday_rows(self, tmp_path):
+        schema = bars_to_table(
+            "VIX",
+            [{"date": "2021-04-05", "open": "10", "high": "11",
+              "low": "9", "close": "10", "volume": "0"}],
+        ).schema
+        existing = pa.Table.from_pylist(
+            [
+                {"trade_date": date(1999, 12, 31), "symbol_id": _symbol_id("VIX"),
+                 "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.0,
+                 "adj_close": 10.0, "volume": 0},
+                {"trade_date": date(2021, 4, 2), "symbol_id": _symbol_id("VIX"),
+                 "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.0,
+                 "adj_close": 10.0, "volume": 0},
+            ],
+            schema=schema,
+        )
+        bronze_dir = (
+            tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VIX"
+        )
+        bronze_dir.mkdir(parents=True)
+        pq.write_table(existing, bronze_dir / "data.parquet")
+        current = bars_to_table(
+            "VIX",
+            [{"date": "2021-04-05", "open": "10", "high": "11",
+              "low": "9", "close": "10", "volume": "0"}],
+        )
+
+        path = write_bronze_parquet(current, "VIX", tmp_path)
+
+        assert _read_single_parquet(path).column("trade_date").to_pylist() == [
+            date(2021, 4, 5)
+        ]
+
     def test_writes_new_file(self, tmp_path):
         """Creates new parquet file when none exists."""
         bars = [

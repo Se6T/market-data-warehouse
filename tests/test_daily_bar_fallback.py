@@ -346,6 +346,9 @@ class TestParseHelpers:
     def test_parse_int(self):
         assert _parse_int("1,234") == 1234
 
+    def test_static_parse_integer_accepts_provider_missing_markers(self):
+        assert DailyBarFallbackClient._parse_integer("N/A") == 0
+
     def test_parse_int_raises_on_missing_value(self):
         try:
             _parse_int(None)

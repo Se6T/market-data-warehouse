@@ -1,6 +1,6 @@
 {
   "name": "r2k-real-estate",
-  "description": "Russell 2000 Real Estate (98 companies)",
+  "description": "Russell 2000 Real Estate (97 companies)",
   "tickers": [
     "CTRE",
     "AHR",
@@ -94,7 +94,6 @@
     "BHR",
     "SEG",
     "MLP",
-    "RMAX",
     "STRW",
     "FSP",
     "TCI",
@@ -283,8 +282,7 @@
       "BHR"
     ],
     [
-      "MLP",
-      "RMAX"
+      "MLP"
     ],
     [
       "STRW",
@@ -300,6 +298,6 @@
     ]
   ],
   "sector": "Real Estate",
-  "vol_driver": "Russell 2000 Real Estate \u2014 small-cap sector fundamentals",
+  "vol_driver": "Russell 2000 Real Estate — small-cap sector fundamentals",
   "source": "iShares Russell 2000 ETF (IWM) holdings"
 }
