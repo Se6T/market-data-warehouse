@@ -23,7 +23,7 @@ from ib_insync import Contract, IB
 
 # Resolve project root for sealed-environment import safety.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
+if str(_PROJECT_ROOT) not in sys.path:  # pragma: no cover - isolated subprocess bootstrap
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from clients.bronze_client import BronzeClient
