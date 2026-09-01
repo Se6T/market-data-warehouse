@@ -75,7 +75,6 @@
     "ADV",
     "GAIA",
     "MYPS",
-    "AREN",
     "TZOO",
     "TEAD",
     "SEAT",
@@ -228,10 +227,6 @@
     [
       "GAIA",
       "MYPS"
-    ],
-    [
-      "AREN",
-      "TZOO"
     ],
     [
       "TEAD",
