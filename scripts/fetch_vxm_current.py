@@ -131,10 +131,15 @@ def _bar_rows(bars: Sequence[object], selected: SelectedContract, as_of: date) -
             volume = int(getattr(bar, "volume"))
         except (TypeError, ValueError, AttributeError) as exc:
             raise VXMRefreshError("VXM historical bar is malformed") from exc
+        # The request deliberately extends through the next calendar day so
+        # that the completed session is available on non-trading days.  During
+        # an active session IBKR can include today's still-forming bar; it is
+        # not evidence for the requested completed session and must be ignored.
+        if trade_date > as_of:
+            continue
         open_, high, low, close = values
         if (
-            trade_date > as_of
-            or not all(math.isfinite(value) and value > 0 for value in values)
+            not all(math.isfinite(value) and value > 0 for value in values)
             or high < max(open_, close)
             or low > min(open_, close)
             or volume < 0

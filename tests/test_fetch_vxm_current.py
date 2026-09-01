@@ -225,7 +225,6 @@ def test_select_current_contract_rejects_impossible_exact_expiry() -> None:
     ("bar", "message"),
     [
         (SimpleNamespace(date="bad", open=1, high=1, low=1, close=1, volume=1), "malformed"),
-        (_bar("2026-08-23"), "invalid"),
         (SimpleNamespace(date="2026-08-21", open=18, high=19, low=17, close=18, volume=-1), "invalid"),
     ],
 )
@@ -235,6 +234,16 @@ def test_bar_rows_rejects_malformed_and_invalid_market_data(bar, message) -> Non
     )
     with pytest.raises(vxm.VXMRefreshError, match=message):
         vxm._bar_rows([bar], selected, date(2026, 8, 22))
+
+
+def test_bar_rows_ignores_the_in_progress_future_session() -> None:
+    selected = vxm.select_current_contract(
+        [_contract()], as_of=date(2026, 8, 21), roll_days=5,
+    )
+
+    rows = vxm._bar_rows([_bar("2026-08-21"), _bar("2026-08-22")], selected, date(2026, 8, 21))
+
+    assert [item["trade_date"] for item in rows] == ["2026-08-21"]
 
 
 def test_mapping_writer_rejects_unsafe_path(tmp_path: Path) -> None:
