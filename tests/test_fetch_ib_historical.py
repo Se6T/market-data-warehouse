@@ -445,28 +445,29 @@ class TestFetchTickerBars:
 
         assert bars == []
 
-    def test_max_years_caps_lookback(self):
-        """max_years clamps head_dt so fewer windows are generated."""
+    def test_max_years_uses_one_bounded_request_without_head_timestamp(self):
+        """Bounded history uses one multi-year request instead of yearly chunks."""
         mock_ib = MagicMock()
         mock_ib.ib.qualifyContractsAsync = AsyncMock(return_value=[Stock("AAPL", "SMART", "USD")])
-        # Stock has data since 1980 — without cap that's ~45 windows
         mock_ib.get_head_timestamp_async = AsyncMock(return_value="19800102-00:00:00")
         mock_ib.get_historical_data_async = AsyncMock(return_value=[_make_bar()])
 
         sem = asyncio.Semaphore(6)
+        end_dt = datetime(2025, 1, 1)
 
-        with patch("scripts.fetch_ib_historical.compute_date_windows") as mock_cdw:
-            mock_cdw.return_value = [("1 Y", "20250101-00:00:00")]
-            ticker, bars = asyncio.run(fetch_ticker_bars("AAPL", mock_ib, sem, max_years=2))
+        ticker, bars = asyncio.run(
+            fetch_ticker_bars("AAPL", mock_ib, sem, max_years=2, end_dt_override=end_dt)
+        )
 
-        # Verify compute_date_windows was called with a capped head_dt (not 1980)
-        call_args = mock_cdw.call_args[0]
-        head_dt_arg = call_args[0]
-        # head_dt should be ~2 years ago, not 1980
-        assert head_dt_arg.year >= 2023
+        assert ticker == "AAPL"
+        assert len(bars) == 1
+        mock_ib.get_head_timestamp_async.assert_not_awaited()
+        mock_ib.get_historical_data_async.assert_awaited_once()
+        assert mock_ib.get_historical_data_async.call_args.kwargs["duration"] == "2 Y"
+        assert mock_ib.get_historical_data_async.call_args.kwargs["end_date"] == "20250101-00:00:00"
 
-    def test_end_dt_override_uses_custom_end(self):
-        """end_dt_override sets end_dt and ignores max_years."""
+    def test_bounded_backfill_uses_requested_interval(self):
+        """Bounded backfill requests only the missing history interval."""
         mock_ib = MagicMock()
         mock_ib.ib.qualifyContractsAsync = AsyncMock(return_value=[Stock("AAPL", "SMART", "USD")])
         mock_ib.get_head_timestamp_async = AsyncMock(return_value="19800102-00:00:00")
@@ -474,20 +475,21 @@ class TestFetchTickerBars:
 
         sem = asyncio.Semaphore(6)
         override_dt = datetime(2020, 6, 15)
-
-        with patch("scripts.fetch_ib_historical.compute_date_windows") as mock_cdw:
-            mock_cdw.return_value = [("1 Y", "20200615-00:00:00")]
-            ticker, bars = asyncio.run(
-                fetch_ticker_bars("AAPL", mock_ib, sem, max_years=2, end_dt_override=override_dt)
+        history_start = datetime(2018, 6, 15)
+        ticker, bars = asyncio.run(
+            fetch_ticker_bars(
+                "AAPL", mock_ib, sem, max_years=2, end_dt_override=override_dt,
+                history_start_override=history_start,
             )
+        )
 
-        # end_dt should be the override, not datetime.now()
-        call_args = mock_cdw.call_args[0]
-        end_dt_arg = call_args[1]
-        assert end_dt_arg == override_dt
-        # head_dt should NOT be capped (max_years ignored with override)
-        head_dt_arg = call_args[0]
-        assert head_dt_arg.year == 1980
+        assert ticker == "AAPL"
+        assert len(bars) == 1
+        mock_ib.get_head_timestamp_async.assert_not_awaited()
+        # The range crosses the 2020 leap day, so a whole-year IB duration
+        # rounds up to preserve the requested start date.
+        assert mock_ib.get_historical_data_async.call_args.kwargs["duration"] == "3 Y"
+        assert mock_ib.get_historical_data_async.call_args.kwargs["end_date"] == "20200615-00:00:00"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -544,8 +546,8 @@ class TestFetchAllTickers:
         assert len(results["AAPL"]) == 1
         assert results["BOOM"] == []
 
-    def test_passes_end_dt_overrides(self):
-        """end_dt_overrides are forwarded to fetch_ticker_bars."""
+    def test_passes_date_overrides(self):
+        """Bounded backfill date overrides are forwarded to fetch_ticker_bars."""
         captured_kwargs = {}
 
         async def mock_fetch_ticker_bars(ticker, ib, sem, **kwargs):
@@ -554,14 +556,20 @@ class TestFetchAllTickers:
 
         mock_ib = MagicMock()
         overrides = {"AAPL": datetime(2020, 6, 15)}
+        history_starts = {"AAPL": datetime(2010, 6, 15)}
 
         with patch("scripts.fetch_ib_historical.fetch_ticker_bars", side_effect=mock_fetch_ticker_bars):
             results = asyncio.run(
-                fetch_all_tickers(["AAPL", "NVDA"], mock_ib, end_dt_overrides=overrides)
+                fetch_all_tickers(
+                    ["AAPL", "NVDA"], mock_ib, end_dt_overrides=overrides,
+                    history_start_overrides=history_starts,
+                )
             )
 
         assert captured_kwargs["AAPL"]["end_dt_override"] == datetime(2020, 6, 15)
         assert captured_kwargs["NVDA"]["end_dt_override"] is None
+        assert captured_kwargs["AAPL"]["history_start_override"] == datetime(2010, 6, 15)
+        assert captured_kwargs["NVDA"]["history_start_override"] is None
 
 
 # ══════════════════════════════════════════════════════════════════════

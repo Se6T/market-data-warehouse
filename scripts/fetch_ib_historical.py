@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Fetch historical daily OHLCV data from Interactive Brokers into bronze parquet.
 
-Parallelises requests using ib_insync's async API with a semaphore to respect
-IB's pacing limit (~6 concurrent historical-data requests).
+Parallelises requests using ib_insync's async API with a semaphore.  For daily
+bars IB allows up to 50 open historical-data requests; the default fetches one
+bounded multi-year range per symbol rather than serial one-year chunks.
 
 Publishes:
   - data-lake/bronze/asset_class=equity/symbol=<ticker>/data.parquet
@@ -25,10 +26,10 @@ Usage:
     python scripts/fetch_ib_historical.py --preset presets/sp500.json --reset
 
     # Custom batch size:
-    python scripts/fetch_ib_historical.py --preset presets/sp500.json --batch-size 25
+    python scripts/fetch_ib_historical.py --preset presets/sp500.json --batch-size 50
 
     # Custom IB Gateway port and concurrency:
-    python scripts/fetch_ib_historical.py --port 7497 --max-concurrent 4
+    python scripts/fetch_ib_historical.py --port 7497 --max-concurrent 50
 
     # Backfill missing older data for tickers already in bronze parquet:
     python scripts/fetch_ib_historical.py --preset presets/sp500.json --backfill
@@ -40,6 +41,7 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import sys
 import time
@@ -78,6 +80,13 @@ BRONZE_DIR = DATA_LAKE / "bronze" / "asset_class=equity"
 CURSOR_DIR = Path.home() / "market-warehouse" / "logs"
 
 MAG7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
+
+# IB permits up to 50 open historical-data requests.  Daily bars are outside
+# the sub-minute pacing rules, but this remains an upper bound rather than a
+# reason to create unbounded work.
+MAX_HISTORICAL_CONCURRENT = 50
+DEFAULT_HISTORY_YEARS = 10
+DEFAULT_BATCH_SIZE = MAX_HISTORICAL_CONCURRENT
 
 # Earliest date IB historical data API supports. Used as fallback when
 # reqHeadTimeStamp returns empty (e.g. BND, DVY — IB can serve bars but
@@ -206,6 +215,12 @@ def compute_date_windows(
     return windows
 
 
+def _daily_duration(history_start: datetime, end_dt: datetime) -> str:
+    """Return the smallest whole-year IB duration covering a daily range."""
+    days = max(1, (end_dt - history_start).days)
+    return f"{max(1, math.ceil(days / 365))} Y"
+
+
 # ── Transform ──────────────────────────────────────────────────────────
 
 
@@ -266,46 +281,49 @@ async def fetch_ticker_bars(
     ticker: str, ib: IBClient, semaphore: asyncio.Semaphore,
     max_years: int = 0,
     end_dt_override: datetime | None = None,
+    history_start_override: datetime | None = None,
     asset_class: str = "equity",
     exchange: str | None = None,
 ) -> tuple[str, list]:
     """Fetch historical daily bars for *ticker*.
 
-    When *max_years* > 0, caps lookback to that many years instead of inception.
-    When *end_dt_override* is set, uses it as the end date and ignores *max_years*.
+    When *max_years* > 0, request the bounded history in one IB daily-bar
+    request, avoiding the expensive per-year/head-timestamp fan-out.  Backfill
+    callers can set both date overrides to request only the missing interval.
+    ``max_years=0`` retains the explicit inception-to-present legacy path.
     Returns ``(ticker, bars)`` where bars are deduplicated IB BarData objects.
     """
     t0 = time.monotonic()
     contract = _make_contract(ticker, asset_class, exchange=exchange)
     await ib.ib.qualifyContractsAsync(contract)
 
-    head_ts = await ib.get_head_timestamp_async(contract)
-    if isinstance(head_ts, datetime):
-        head_dt = head_ts.replace(tzinfo=None)
+    if max_years > 0:
+        end_dt = end_dt_override or datetime.now()
+        history_start = history_start_override or end_dt - timedelta(days=max_years * 365)
+        if history_start >= end_dt:
+            console.print(f"    [yellow]{ticker}: empty requested history range[/yellow]")
+            return (ticker, [])
+        windows = [(_daily_duration(history_start, end_dt), end_dt.strftime("%Y%m%d-%H:%M:%S"))]
+        history_label_start = history_start
     else:
-        head_str = str(head_ts)
-        if not head_str or head_str == "[]":
-            console.print(
-                f"    [dim]{ticker}: no head timestamp — falling back to {IB_EARLIEST_DATE:%Y-%m-%d}[/dim]"
-            )
-            head_dt = IB_EARLIEST_DATE
+        head_ts = await ib.get_head_timestamp_async(contract)
+        if isinstance(head_ts, datetime):
+            head_dt = head_ts.replace(tzinfo=None)
         else:
-            head_dt = datetime.strptime(head_str, "%Y%m%d-%H:%M:%S")
+            head_str = str(head_ts)
+            if not head_str or head_str == "[]":
+                console.print(
+                    f"    [dim]{ticker}: no head timestamp — falling back to {IB_EARLIEST_DATE:%Y-%m-%d}[/dim]"
+                )
+                head_dt = IB_EARLIEST_DATE
+            else:
+                head_dt = datetime.strptime(head_str, "%Y%m%d-%H:%M:%S")
 
-    if end_dt_override is not None:
-        end_dt = end_dt_override
-    else:
-        end_dt = datetime.now()
-
-        # Cap lookback if max_years is set (only in normal mode)
-        if max_years > 0:
-            earliest_allowed = end_dt - timedelta(days=max_years * 365)
-            if head_dt < earliest_allowed:
-                head_dt = earliest_allowed
-
-    windows = compute_date_windows(head_dt, end_dt)
+        end_dt = end_dt_override or datetime.now()
+        windows = compute_date_windows(head_dt, end_dt)
+        history_label_start = head_dt
     console.print(
-        f"    [dim]{ticker}: history {head_dt:%Y-%m-%d} → {end_dt:%Y-%m-%d}"
+        f"    [dim]{ticker}: history {history_label_start:%Y-%m-%d} → {end_dt:%Y-%m-%d}"
         f" ({len(windows)} window{'s' if len(windows) != 1 else ''})[/dim]"
     )
 
@@ -344,16 +362,17 @@ async def fetch_ticker_bars(
 
 
 async def fetch_all_tickers(
-    tickers: list[str], ib: IBClient, max_concurrent: int = 6,
+    tickers: list[str], ib: IBClient, max_concurrent: int = MAX_HISTORICAL_CONCURRENT,
     max_years: int = 0,
     end_dt_overrides: dict[str, datetime] | None = None,
+    history_start_overrides: dict[str, datetime] | None = None,
     asset_class: str = "equity",
     exchange_map: dict[str, str] | None = None,
 ) -> dict[str, list]:
     """Fetch historical bars for all *tickers* concurrently.
 
-    When *end_dt_overrides* is provided, each ticker uses its override as the
-    end date (for backfill mode).
+    When date overrides are provided, each ticker uses the requested interval
+    (for bounded backfill mode).
 
     Returns ``{ticker: bars}`` dict.  Per-ticker errors are logged and result
     in empty bar lists (the run continues for remaining tickers).
@@ -367,8 +386,11 @@ async def fetch_all_tickers(
     async def _safe_fetch(ticker: str) -> tuple[str, list]:
         try:
             edt = end_dt_overrides.get(ticker) if end_dt_overrides else None
+            history_start = history_start_overrides.get(ticker) if history_start_overrides else None
             exch = (exchange_map or {}).get(ticker)
-            return await fetch_ticker_bars(ticker, ib, semaphore, max_years=max_years, end_dt_override=edt, asset_class=asset_class, exchange=exch)
+            return await fetch_ticker_bars(ticker, ib, semaphore, max_years=max_years,
+                                           end_dt_override=edt, history_start_override=history_start,
+                                           asset_class=asset_class, exchange=exch)
         except (IBError, Exception) as exc:
             console.print(f"    [red]{ticker}: {type(exc).__name__} — {exc}[/red]")
             return (ticker, [])
@@ -476,14 +498,14 @@ def main():
     parser.add_argument(
         "--years",
         type=int,
-        default=10,
+        default=DEFAULT_HISTORY_YEARS,
         help="Max years of history to fetch (default: 10, 0=inception)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=5,
-        help="Tickers per async batch (default: 5)",
+        default=DEFAULT_BATCH_SIZE,
+        help=f"Tickers per async batch (default: {DEFAULT_BATCH_SIZE})",
     )
     parser.add_argument(
         "--host",
@@ -500,8 +522,8 @@ def main():
     parser.add_argument(
         "--max-concurrent",
         type=int,
-        default=6,
-        help="Max concurrent IB historical requests (default: 6)",
+        default=MAX_HISTORICAL_CONCURRENT,
+        help=f"Max concurrent IB historical requests (1-{MAX_HISTORICAL_CONCURRENT}, default: {MAX_HISTORICAL_CONCURRENT})",
     )
     parser.add_argument(
         "--backfill",
@@ -515,6 +537,12 @@ def main():
         help="Asset class to fetch (default: equity).",
     )
     args = parser.parse_args()
+    if args.years < 0:
+        parser.error("--years must be non-negative")
+    if args.batch_size < 1:
+        parser.error("--batch-size must be at least 1")
+    if not 1 <= args.max_concurrent <= MAX_HISTORICAL_CONCURRENT:
+        parser.error(f"--max-concurrent must be between 1 and {MAX_HISTORICAL_CONCURRENT}")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -621,10 +649,40 @@ def _run_backfill(args, ib, bronze, all_tickers, remaining, completed,
         console.print("[green bold]No tickers to backfill.[/green bold]")
         return
 
-    # Build end_dt_overrides: each ticker's oldest existing date
+    # Bound the backfill to the requested history horizon.  Previously an
+    # end-date override silently bypassed --years, causing one request per year
+    # all the way to each symbol's inception.
+    history_floor = (
+        datetime.now() - timedelta(days=args.years * 365)
+        if args.years > 0 else None
+    )
+    if history_floor is not None:
+        already_covered = [
+            ticker for ticker in backfill_tickers
+            if datetime.strptime(oldest_dates[ticker], "%Y-%m-%d") <= history_floor
+        ]
+        if already_covered:
+            completed.update(already_covered)
+            save_cursor(cursor_name, completed, started_at)
+            backfill_tickers = [ticker for ticker in backfill_tickers if ticker not in already_covered]
+            console.print(
+                f"[cyan]Skipping {len(already_covered)} tickers already covered through "
+                f"{history_floor:%Y-%m-%d}[/cyan]"
+            )
+
+    if not backfill_tickers:
+        console.print("[green bold]No tickers need backfill within the requested history horizon.[/green bold]")
+        return
+
+    # Each ticker ends at its existing oldest bar.  The bounded start makes
+    # this one multi-year request instead of an inception-to-date fan-out.
     end_dt_overrides: dict[str, datetime] = {}
     for ticker in backfill_tickers:
         end_dt_overrides[ticker] = datetime.strptime(oldest_dates[ticker], "%Y-%m-%d")
+    history_start_overrides = (
+        {ticker: history_floor for ticker in backfill_tickers}
+        if history_floor is not None else None
+    )
 
     console.print(f"[bold]{len(backfill_tickers)} tickers to backfill[/bold]")
 
@@ -646,9 +704,14 @@ def _run_backfill(args, ib, bronze, all_tickers, remaining, completed,
         )
 
         batch_overrides = {t: end_dt_overrides[t] for t in batch}
+        batch_history_starts = (
+            {t: history_start_overrides[t] for t in batch}
+            if history_start_overrides is not None else None
+        )
         ticker_bars = ib.ib.run(
             fetch_all_tickers(batch, ib, max_concurrent=args.max_concurrent,
-                              end_dt_overrides=batch_overrides,
+                              max_years=args.years, end_dt_overrides=batch_overrides,
+                              history_start_overrides=batch_history_starts,
                               asset_class=asset_class,
                               exchange_map=exchange_map)
         )
