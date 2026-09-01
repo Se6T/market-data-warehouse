@@ -87,6 +87,9 @@ MAG7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
 MAX_HISTORICAL_CONCURRENT = 50
 DEFAULT_HISTORY_YEARS = 10
 DEFAULT_BATCH_SIZE = MAX_HISTORICAL_CONCURRENT
+# A healthy 10-year daily request completes in seconds.  Do not let a bad or
+# delisted contract pin an entire parallel batch indefinitely.
+HISTORICAL_REQUEST_TIMEOUT_SECONDS = 30
 
 # Earliest date IB historical data API supports. Used as fallback when
 # reqHeadTimeStamp returns empty (e.g. BND, DVY — IB can serve bars but
@@ -329,12 +332,15 @@ async def fetch_ticker_bars(
 
     async def _fetch_chunk(duration: str, end_str: str) -> list:
         async with semaphore:
-            return await ib.get_historical_data_async(
-                contract,
-                duration=duration,
-                bar_size="1 day",
-                what_to_show="TRADES",
-                end_date=end_str,
+            return await asyncio.wait_for(
+                ib.get_historical_data_async(
+                    contract,
+                    duration=duration,
+                    bar_size="1 day",
+                    what_to_show="TRADES",
+                    end_date=end_str,
+                ),
+                timeout=HISTORICAL_REQUEST_TIMEOUT_SECONDS,
             )
 
     chunk_results = await asyncio.gather(
