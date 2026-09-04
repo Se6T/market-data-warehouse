@@ -4,7 +4,6 @@ import json
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PRESETS = ROOT / "presets"
 
@@ -32,10 +31,26 @@ def test_current_russell_2000_preset_is_exact_sector_union() -> None:
     current = _tickers("russell-2000-current.json")
 
     assert len(sector_files) == 11
-    assert len(sector_tickers) == len(set(sector_tickers)) == 1921
-    assert len(current) == len(set(current)) == 1921
+    assert len(sector_tickers) == len(set(sector_tickers)) == 1919
+    assert len(current) == len(set(current)) == 1919
     assert set(current) == set(sector_tickers)
-    assert {"MDV", "BBBY", "TALK", "LEG", "RMAX", "TWO"}.isdisjoint(current)
+    assert {"MDV", "BBBY", "TALK", "LEG", "RMAX", "TWO", "CRNX", "HLX"}.isdisjoint(
+        current
+    )
+
+
+def test_r2k_aggregate_declares_its_exact_ticker_and_pair_counts() -> None:
+    payload = json.loads((PRESETS / "r2k.json").read_text(encoding="utf-8"))
+    declared = re.search(
+        r"— (\d+) companies, (\d+) sectors, (\d+) pairs$", payload["description"]
+    )
+
+    assert declared is not None
+    assert tuple(map(int, declared.groups())) == (
+        len(payload["tickers"]),
+        len(tuple(name for name in payload["groups"] if not name.startswith("tier-"))),
+        len(payload["pairs"]),
+    )
 
 
 def test_trend_engine_equity_union_contains_russell_and_other_inputs_once() -> None:
@@ -45,4 +60,6 @@ def test_trend_engine_equity_union_contains_russell_and_other_inputs_once() -> N
 
     assert len(combined) == len(set(combined)) == len(set(russell) | set(other))
     assert set(combined) == set(russell) | set(other)
-    assert {"MDV", "BBBY", "TALK", "LEG", "RMAX", "TWO"}.isdisjoint(combined)
+    assert {"MDV", "BBBY", "TALK", "LEG", "RMAX", "TWO", "CRNX", "HLX"}.isdisjoint(
+        combined
+    )

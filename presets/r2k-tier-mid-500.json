@@ -1,6 +1,6 @@
 {
   "name": "r2k-tier-mid-500",
-  "description": "Russell 2000 R2K Ranks 101-600 by weight (500 companies)",
+  "description": "Russell 2000 R2K Ranks 101-600 by weight (499 companies)",
   "tickers": [
     "NJR",
     "CNX",
@@ -123,7 +123,6 @@
     "SRRK",
     "ACLX",
     "TPH",
-    "CRNX",
     "NG",
     "SIG",
     "VISN",
@@ -743,10 +742,6 @@
     [
       "SRRK",
       "ACLX"
-    ],
-    [
-      "TPH",
-      "CRNX"
     ],
     [
       "NG",
@@ -1506,6 +1501,6 @@
     ]
   ],
   "sector": "Multi-Sector",
-  "vol_driver": "Small-cap factor exposure \u2014 ranks 101-600 by weight",
+  "vol_driver": "Small-cap factor exposure — ranks 101-600 by weight",
   "source": "iShares Russell 2000 ETF (IWM) holdings"
 }

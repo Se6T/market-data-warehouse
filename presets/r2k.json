@@ -1,6 +1,6 @@
 {
   "name": "r2k",
-  "description": "Russell 2000 (IWM) \u2014 1927 companies, 11 sectors, 968 pairs",
+  "description": "Russell 2000 (IWM) — 1925 companies, 11 sectors, 966 pairs",
   "tickers": [
     "AAMI",
     "AAOI",
@@ -447,7 +447,6 @@
     "CRML",
     "CRMT",
     "CRNC",
-    "CRNX",
     "CRSP",
     "CRSR",
     "CRVL",
@@ -816,7 +815,6 @@
     "HLIT",
     "HLLY",
     "HLMN",
-    "HLX",
     "HMN",
     "HNI",
     "HNRG",
@@ -2822,10 +2820,6 @@
     [
       "INDV",
       "SRRK"
-    ],
-    [
-      "ACLX",
-      "CRNX"
     ],
     [
       "ADMA",
@@ -4972,10 +4966,6 @@
       "SFL"
     ],
     [
-      "WTTR",
-      "HLX"
-    ],
-    [
       "VTOL",
       "KOS"
     ],
@@ -7053,7 +7043,7 @@
           "UMBF"
         ]
       ],
-      "vol_driver": "Russell 2000 Financials \u2014 small-cap sector fundamentals"
+      "vol_driver": "Russell 2000 Financials — small-cap sector fundamentals"
     },
     "health-care": {
       "name": "Health Care",
@@ -7092,7 +7082,6 @@
         "INDV",
         "SRRK",
         "ACLX",
-        "CRNX",
         "ADMA",
         "MIRM",
         "TERN",
@@ -7519,10 +7508,6 @@
         [
           "INDV",
           "SRRK"
-        ],
-        [
-          "ACLX",
-          "CRNX"
         ],
         [
           "ADMA",
@@ -8249,7 +8234,7 @@
           "ENSG"
         ]
       ],
-      "vol_driver": "Russell 2000 Health Care \u2014 small-cap sector fundamentals"
+      "vol_driver": "Russell 2000 Health Care — small-cap sector fundamentals"
     },
     "industrials": {
       "name": "Industrials",
@@ -9031,7 +9016,7 @@
           "BE"
         ]
       ],
-      "vol_driver": "Russell 2000 Industrials \u2014 small-cap sector fundamentals"
+      "vol_driver": "Russell 2000 Industrials — small-cap sector fundamentals"
     },
     "information-technology": {
       "name": "Information Technology",
@@ -9670,7 +9655,7 @@
           "NEON"
         ]
       ],
-      "vol_driver": "Russell 2000 Information Technology \u2014 small-cap sector fundamentals"
+      "vol_driver": "Russell 2000 Information Technology — small-cap sector fundamentals"
     },
     "consumer-discretionary": {
       "name": "Consumer Discretionary",
@@ -10272,7 +10257,7 @@
           "IBP"
         ]
       ],
-      "vol_driver": "Russell 2000 Consumer Discretionary \u2014 small-cap sector fundamentals"
+      "vol_driver": "Russell 2000 Consumer Discretionary — small-cap sector fundamentals"
     },
     "energy": {
       "name": "Energy",
@@ -10323,7 +10308,6 @@
         "WKC",
         "SFL",
         "WTTR",
-        "HLX",
         "VTOL",
         "KOS",
         "NAT",
@@ -10474,10 +10458,6 @@
           "SFL"
         ],
         [
-          "WTTR",
-          "HLX"
-        ],
-        [
           "VTOL",
           "KOS"
         ],
@@ -10598,7 +10578,7 @@
           "UEC"
         ]
       ],
-      "vol_driver": "Russell 2000 Energy \u2014 small-cap sector fundamentals"
+      "vol_driver": "Russell 2000 Energy — small-cap sector fundamentals"
     },
     "real-estate": {
       "name": "Real Estate",
@@ -10906,7 +10886,7 @@
           "CTRE"
         ]
       ],
-      "vol_driver": "Russell 2000 Real Estate \u2014 small-cap sector fundamentals"
+      "vol_driver": "Russell 2000 Real Estate — small-cap sector fundamentals"
     },
     "materials": {
       "name": "Materials",
@@ -11161,7 +11141,7 @@
           "TSEOF"
         ]
       ],
-      "vol_driver": "Russell 2000 Materials \u2014 small-cap sector fundamentals"
+      "vol_driver": "Russell 2000 Materials — small-cap sector fundamentals"
     },
     "communication": {
       "name": "Communication",
@@ -11402,7 +11382,7 @@
           "SATS"
         ]
       ],
-      "vol_driver": "Russell 2000 Communication \u2014 small-cap sector fundamentals"
+      "vol_driver": "Russell 2000 Communication — small-cap sector fundamentals"
     },
     "consumer-staples": {
       "name": "Consumer Staples",
@@ -11596,7 +11576,7 @@
           "CALM"
         ]
       ],
-      "vol_driver": "Russell 2000 Consumer Staples \u2014 small-cap sector fundamentals"
+      "vol_driver": "Russell 2000 Consumer Staples — small-cap sector fundamentals"
     },
     "utilities": {
       "name": "Utilities",
@@ -11700,7 +11680,7 @@
           "OKLO"
         ]
       ],
-      "vol_driver": "Russell 2000 Utilities \u2014 small-cap sector fundamentals"
+      "vol_driver": "Russell 2000 Utilities — small-cap sector fundamentals"
     },
     "tier-top-100": {
       "name": "R2K Top 100 by weight (most liquid)",
@@ -12009,7 +11989,7 @@
           "BKH"
         ]
       ],
-      "vol_driver": "Small-cap factor exposure \u2014 top 100 by weight (most liquid)"
+      "vol_driver": "Small-cap factor exposure — top 100 by weight (most liquid)"
     },
     "tier-top-200": {
       "name": "R2K Top 200 by weight",
@@ -12618,7 +12598,7 @@
           "IRT"
         ]
       ],
-      "vol_driver": "Small-cap factor exposure \u2014 top 200 by weight"
+      "vol_driver": "Small-cap factor exposure — top 200 by weight"
     },
     "tier-top-500": {
       "name": "R2K Top 500 by weight",
@@ -12845,7 +12825,6 @@
         "SRRK",
         "ACLX",
         "TPH",
-        "CRNX",
         "NG",
         "SIG",
         "VISN",
@@ -13567,10 +13546,6 @@
           "ACLX"
         ],
         [
-          "TPH",
-          "CRNX"
-        ],
-        [
           "NG",
           "SIG"
         ],
@@ -14127,7 +14102,7 @@
           "VAC"
         ]
       ],
-      "vol_driver": "Small-cap factor exposure \u2014 top 500 by weight"
+      "vol_driver": "Small-cap factor exposure — top 500 by weight"
     },
     "tier-mid-500": {
       "name": "R2K Ranks 101-600 by weight",
@@ -14254,7 +14229,6 @@
         "SRRK",
         "ACLX",
         "TPH",
-        "CRNX",
         "NG",
         "SIG",
         "VISN",
@@ -14874,10 +14848,6 @@
         [
           "SRRK",
           "ACLX"
-        ],
-        [
-          "TPH",
-          "CRNX"
         ],
         [
           "NG",
@@ -15636,7 +15606,7 @@
           "SMR"
         ]
       ],
-      "vol_driver": "Small-cap factor exposure \u2014 ranks 101-600 by weight"
+      "vol_driver": "Small-cap factor exposure — ranks 101-600 by weight"
     },
     "tier-tail-500": {
       "name": "R2K Smallest 500 by weight",
@@ -17140,7 +17110,7 @@
           "PDLI"
         ]
       ],
-      "vol_driver": "Small-cap factor exposure \u2014 smallest 500 by weight"
+      "vol_driver": "Small-cap factor exposure — smallest 500 by weight"
     }
   }
 }

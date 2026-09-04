@@ -1,6 +1,6 @@
 {
   "name": "r2k-tier-top-500",
-  "description": "Russell 2000 R2K Top 500 by weight (500 companies)",
+  "description": "Russell 2000 R2K Top 500 by weight (499 companies)",
   "tickers": [
     "BE",
     "FN",
@@ -223,7 +223,6 @@
     "SRRK",
     "ACLX",
     "TPH",
-    "CRNX",
     "NG",
     "SIG",
     "VISN",
@@ -945,10 +944,6 @@
       "ACLX"
     ],
     [
-      "TPH",
-      "CRNX"
-    ],
-    [
       "NG",
       "SIG"
     ],
@@ -1506,6 +1501,6 @@
     ]
   ],
   "sector": "Multi-Sector",
-  "vol_driver": "Small-cap factor exposure \u2014 top 500 by weight",
+  "vol_driver": "Small-cap factor exposure — top 500 by weight",
   "source": "iShares Russell 2000 ETF (IWM) holdings"
 }

@@ -491,6 +491,25 @@ class TestFetchTickerBars:
         assert mock_ib.get_historical_data_async.call_args.kwargs["duration"] == "3 Y"
         assert mock_ib.get_historical_data_async.call_args.kwargs["end_date"] == "20200615-00:00:00"
 
+    def test_bounded_history_rejects_an_empty_requested_interval(self):
+        mock_ib = MagicMock()
+        mock_ib.ib.qualifyContractsAsync = AsyncMock(return_value=[Stock("AAPL", "SMART", "USD")])
+        mock_ib.get_historical_data_async = AsyncMock()
+
+        ticker, bars = asyncio.run(
+            fetch_ticker_bars(
+                "AAPL",
+                mock_ib,
+                asyncio.Semaphore(1),
+                max_years=1,
+                end_dt_override=datetime(2025, 1, 1),
+                history_start_override=datetime(2025, 1, 1),
+            )
+        )
+
+        assert (ticker, bars) == ("AAPL", [])
+        mock_ib.get_historical_data_async.assert_not_awaited()
+
 
 # ══════════════════════════════════════════════════════════════════════
 # fetch_all_tickers (async)
@@ -781,6 +800,20 @@ def _patch_ib_factory(mock_ib):
 
 
 class TestMain:
+    @pytest.mark.parametrize(
+        "arguments",
+        [
+            ["--years", "-1"],
+            ["--batch-size", "0"],
+            ["--max-concurrent", "999"],
+        ],
+    )
+    def test_main_rejects_invalid_numeric_arguments(self, monkeypatch, arguments):
+        monkeypatch.setattr("sys.argv", ["fetch_ib_historical.py", *arguments])
+
+        with pytest.raises(SystemExit, match="2"):
+            main()
+
     @pytest.mark.integration
     def test_main_end_to_end(self, tmp_path, monkeypatch):
         """Full integration: main() with mocked IB client and bronze parquet."""
@@ -1177,6 +1210,57 @@ class TestMain:
 
         # No fetch should have happened (no data to backfill)
         mock_ib.ib.run.assert_not_called()
+
+    @pytest.mark.integration
+    def test_main_backfill_skips_history_already_covering_requested_horizon(
+        self, tmp_path, monkeypatch
+    ):
+        bronze_dir = tmp_path / "bronze"
+        _seed_bronze(
+            bronze_dir,
+            "AAPL",
+            [
+                {
+                    "trade_date": "2020-01-02",
+                    "symbol_id": 1,
+                    "open": 150.0,
+                    "high": 155.0,
+                    "low": 149.0,
+                    "close": 153.0,
+                    "adj_close": 153.0,
+                    "volume": 1000000,
+                }
+            ],
+        )
+        cursor_dir = tmp_path / "cursors"
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "fetch_ib_historical.py",
+                "--tickers",
+                "AAPL",
+                "--backfill",
+                "--years",
+                "1",
+            ],
+        )
+        mock_ib = _mock_ib_instance({})
+
+        with (
+            _patch_ib_factory(mock_ib),
+            patch(
+                "scripts.fetch_ib_historical.BronzeClient",
+                lambda **kw: BronzeClient(bronze_dir=bronze_dir),
+            ),
+            patch("scripts.fetch_ib_historical.BRONZE_DIR", bronze_dir),
+            patch("scripts.fetch_ib_historical.CURSOR_DIR", cursor_dir),
+        ):
+            main()
+
+        mock_ib.connect.assert_called_once_with(host="127.0.0.1", port=4001)
+        mock_ib.ib.run.assert_not_called()
+        data = json.loads((cursor_dir / "cursor_backfill_custom.json").read_text())
+        assert data["completed"] == ["AAPL"]
 
     @pytest.mark.integration
     def test_main_backfill_empty_bars(self, tmp_path, monkeypatch):
