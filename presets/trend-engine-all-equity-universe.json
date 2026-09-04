@@ -1,7 +1,7 @@
 {
   "name": "trend_engine_all_equity_universe",
   "description": "Union of current Russell 2000/IWM holdings and all other trend-engine equity inputs, excluding broker-confirmed inactive symbols.",
-  "assembled_on": "2026-08-30",
+  "assembled_on": "2026-09-04",
   "sources": [
     "russell-2000-current.json",
     "trend-engine-universe.json"
@@ -487,7 +487,6 @@
     "CRML",
     "CRMT",
     "CRNC",
-    "CRNX",
     "CRSP",
     "CRSR",
     "CRVL",
@@ -901,7 +900,6 @@
     "HLIT",
     "HLLY",
     "HLMN",
-    "HLX",
     "HMN",
     "HNI",
     "HNRG",

@@ -1,6 +1,6 @@
 {
   "name": "r2k-energy",
-  "description": "Russell 2000 Energy (105 companies)",
+  "description": "Russell 2000 Energy (104 companies)",
   "tickers": [
     "UEC",
     "AROC",
@@ -47,7 +47,6 @@
     "WKC",
     "SFL",
     "WTTR",
-    "HLX",
     "VTOL",
     "KOS",
     "NAT",
@@ -198,10 +197,6 @@
       "SFL"
     ],
     [
-      "WTTR",
-      "HLX"
-    ],
-    [
       "VTOL",
       "KOS"
     ],
@@ -323,6 +318,6 @@
     ]
   ],
   "sector": "Energy",
-  "vol_driver": "Russell 2000 Energy \u2014 small-cap sector fundamentals",
+  "vol_driver": "Russell 2000 Energy — small-cap sector fundamentals",
   "source": "iShares Russell 2000 ETF (IWM) holdings"
 }

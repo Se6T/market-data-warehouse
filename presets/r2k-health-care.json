@@ -1,6 +1,6 @@
 {
   "name": "r2k-health-care",
-  "description": "Russell 2000 Health Care (394 companies)",
+  "description": "Russell 2000 Health Care (393 companies)",
   "tickers": [
     "ENSG",
     "GH",
@@ -35,7 +35,6 @@
     "INDV",
     "SRRK",
     "ACLX",
-    "CRNX",
     "ADMA",
     "MIRM",
     "TERN",
@@ -461,10 +460,6 @@
     [
       "INDV",
       "SRRK"
-    ],
-    [
-      "ACLX",
-      "CRNX"
     ],
     [
       "ADMA",
@@ -1188,6 +1183,6 @@
     ]
   ],
   "sector": "Health Care",
-  "vol_driver": "Russell 2000 Health Care \u2014 small-cap sector fundamentals",
+  "vol_driver": "Russell 2000 Health Care — small-cap sector fundamentals",
   "source": "iShares Russell 2000 ETF (IWM) holdings"
 }
