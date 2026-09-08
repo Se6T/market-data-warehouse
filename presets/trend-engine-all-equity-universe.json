@@ -1,7 +1,7 @@
 {
   "name": "trend_engine_all_equity_universe",
   "description": "Union of current Russell 2000/IWM holdings and all other trend-engine equity inputs, excluding broker-confirmed inactive symbols.",
-  "assembled_on": "2026-09-04",
+  "assembled_on": "2026-09-08",
   "sources": [
     "russell-2000-current.json",
     "trend-engine-universe.json"
@@ -149,7 +149,6 @@
     "AOUT",
     "APAM",
     "APEI",
-    "APGE",
     "APLD",
     "APLE",
     "APOG",

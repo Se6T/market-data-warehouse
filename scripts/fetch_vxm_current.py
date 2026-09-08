@@ -19,6 +19,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+import exchange_calendars
 from ib_insync import Contract, IB
 
 # Resolve project root for sealed-environment import safety.
@@ -116,10 +117,11 @@ def select_current_contract(
 
 
 def _completed_session(as_of: date) -> date:
-    candidate = as_of
-    while candidate.weekday() >= 5:
-        candidate -= timedelta(days=1)
-    return candidate
+    # CFE holiday trading can belong to the following dated session.  A
+    # weekday alone is not proof that IBKR publishes a completed daily bar.
+    return exchange_calendars.get_calendar("XCBF").date_to_session(
+        as_of.isoformat(), direction="previous"
+    ).date()
 
 
 def _bar_rows(bars: Sequence[object], selected: SelectedContract, as_of: date) -> list[dict]:

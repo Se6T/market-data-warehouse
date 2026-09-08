@@ -76,6 +76,52 @@ def test_select_current_contract_is_exact_and_deterministic() -> None:
 
 
 @pytest.mark.parametrize(
+    ("as_of", "expected"),
+    [
+        (date(2026, 9, 7), date(2026, 9, 4)),
+        (date(2026, 9, 6), date(2026, 9, 4)),
+        (date(2026, 9, 8), date(2026, 9, 8)),
+    ],
+)
+def test_vxm_completed_session_uses_cfe_holiday_calendar(as_of, expected) -> None:
+    assert vxm._completed_session(as_of) == expected
+
+
+def test_labor_day_owner_mapping_and_inventory_keep_friday_without_fabrication(tmp_path):
+    from scripts import refresh_all_and_rebuild as publication
+
+    broker = _FakeIB(bars=[_bar("2026-09-04"), _bar("2026-09-08")])
+    mapping = tmp_path / "mapping.json"
+    vxm.refresh_current_vxm(
+        warehouse=tmp_path / "warehouse", as_of=date(2026, 9, 7),
+        result_json=tmp_path / "result.json", mapping_json=mapping,
+        roll_days=5, host="127.0.0.1", port=4002, ib_factory=lambda: broker,
+    )
+    config = publication.RefreshConfig(
+        warehouse=tmp_path / "warehouse", db_path=tmp_path / "market.duckdb",
+        manifest_path=tmp_path / "manifest.json", inventory_path=tmp_path / "inventory.json",
+        as_of=date(2026, 9, 7), python=Path(__import__("sys").executable),
+    )
+    assert publication._read_vxm_mapping(mapping, config)["latest_session"] == "2026-09-04"
+    assert publication.expected_latest_session("futures", config.as_of, "VXM_20260916") == date(2026, 9, 4)
+    assert publication.expected_latest_session("futures", config.as_of, "ES_202612") == config.as_of
+    path = config.warehouse / "data-lake/bronze/asset_class=futures/symbol=VXM_20260916/data.parquet"
+    assert pq.ParquetFile(path).read()["trade_date"].to_pylist() == [date(2026, 9, 4)]
+    inventory = publication.discover_inventory(
+        config.warehouse / "data-lake/bronze", require_all_asset_classes=False,
+    )
+    publication._validate_post_inventory(inventory, inventory, config.as_of)
+    with pytest.raises(publication.RefreshFailure, match="expected latest session 2026-09-08"):
+        publication._validate_post_inventory(inventory, inventory, date(2026, 9, 8))
+
+
+def test_holiday_does_not_admit_missing_last_real_vxm_session() -> None:
+    selected = vxm.select_current_contract([_contract()], as_of=date(2026, 9, 7), roll_days=5)
+    with pytest.raises(vxm.VXMRefreshError, match="2026-09-04"):
+        vxm._bar_rows([_bar("2026-09-03"), _bar("2026-09-08")], selected, date(2026, 9, 7))
+
+
+@pytest.mark.parametrize(
     ("overrides", "message"),
     [
         ({"symbol": "VX"}, "root"),

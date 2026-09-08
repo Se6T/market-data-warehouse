@@ -1,6 +1,6 @@
 {
   "name": "r2k-health-care",
-  "description": "Russell 2000 Health Care (393 companies)",
+  "description": "Russell 2000 Health Care (392 companies)",
   "tickers": [
     "ENSG",
     "GH",
@@ -58,7 +58,6 @@
     "CPRX",
     "PRVA",
     "SYRE",
-    "APGE",
     "IDYA",
     "CON",
     "DNLI",
@@ -504,10 +503,6 @@
     [
       "CPRX",
       "PRVA"
-    ],
-    [
-      "SYRE",
-      "APGE"
     ],
     [
       "IDYA",

@@ -1,6 +1,6 @@
 {
   "name": "r2k",
-  "description": "Russell 2000 (IWM) — 1925 companies, 11 sectors, 966 pairs",
+  "description": "Russell 2000 (IWM) — 1924 companies, 11 sectors, 965 pairs",
   "tickers": [
     "AAMI",
     "AAOI",
@@ -130,7 +130,6 @@
     "AOUT",
     "APAM",
     "APEI",
-    "APGE",
     "APLD",
     "APLE",
     "APOG",
@@ -2864,10 +2863,6 @@
     [
       "CPRX",
       "PRVA"
-    ],
-    [
-      "SYRE",
-      "APGE"
     ],
     [
       "IDYA",
@@ -7105,7 +7100,6 @@
         "CPRX",
         "PRVA",
         "SYRE",
-        "APGE",
         "IDYA",
         "CON",
         "DNLI",
@@ -7552,10 +7546,6 @@
         [
           "CPRX",
           "PRVA"
-        ],
-        [
-          "SYRE",
-          "APGE"
         ],
         [
           "IDYA",
@@ -12956,7 +12946,6 @@
         "CARG",
         "CWT",
         "PLUG",
-        "APGE",
         "IDYA",
         "CURB",
         "JOE",
@@ -13806,10 +13795,6 @@
           "CWT"
         ],
         [
-          "PLUG",
-          "APGE"
-        ],
-        [
           "IDYA",
           "CURB"
         ],
@@ -14360,7 +14345,6 @@
         "CARG",
         "CWT",
         "PLUG",
-        "APGE",
         "IDYA",
         "CURB",
         "JOE",
@@ -15108,10 +15092,6 @@
         [
           "CARG",
           "CWT"
-        ],
-        [
-          "PLUG",
-          "APGE"
         ],
         [
           "IDYA",

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 import duckdb
+import exchange_calendars
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -746,7 +747,7 @@ def _read_vxm_mapping(path: Path, config: RefreshConfig) -> dict[str, object]:
             or document["as_of"] != config.as_of.isoformat()
             or document["roll_days"] != config.vxm_roll_days
             or document["latest_session"] != expected_latest_session(
-                "futures", config.as_of
+                "futures", config.as_of, symbol
             ).isoformat()
             or expiry <= config.as_of + timedelta(days=config.vxm_roll_days)
         ):
@@ -966,7 +967,7 @@ def _validate_post_inventory(
             continue
         if not refresh_broker_assets and current.asset_class in {"equity", "futures"}:
             continue
-        expected = expected_latest_session(current.asset_class, as_of).isoformat()
+        expected = expected_latest_session(current.asset_class, as_of, current.symbol).isoformat()
         if (
             not refresh_broker_assets
             and current.asset_class == "volatility"
@@ -983,16 +984,20 @@ def _validate_post_inventory(
             )
 
 
-def expected_latest_session(asset_class: str, as_of: date) -> date:
+def expected_latest_session(asset_class: str, as_of: date, symbol: str = "") -> date:
     """Return the deterministic completed session required for an asset class.
 
-    Crypto has a UTC daily session.  The currently supported futures universe is
-    session-dated Monday through Friday.  Equity and CBOE volatility identities
-    use the repository's deterministic NYSE holiday calendar.
+    Crypto has a UTC daily session.  Mini VIX uses the CFE dated-session
+    calendar; other futures retain their Monday-through-Friday contract.
+    Equity and CBOE volatility use the deterministic NYSE holiday calendar.
     """
     if asset_class == "crypto":
         return as_of
     if asset_class == "futures":
+        if symbol.startswith("VXM_"):
+            return exchange_calendars.get_calendar("XCBF").date_to_session(
+                as_of.isoformat(), direction="previous"
+            ).date()
         candidate = as_of
         while candidate.weekday() >= 5:
             candidate -= timedelta(days=1)

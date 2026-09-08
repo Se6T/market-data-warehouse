@@ -1,6 +1,6 @@
 {
   "name": "r2k-tier-mid-500",
-  "description": "Russell 2000 R2K Ranks 101-600 by weight (499 companies)",
+  "description": "Russell 2000 R2K Ranks 101-600 by weight (498 companies)",
   "tickers": [
     "NJR",
     "CNX",
@@ -254,7 +254,6 @@
     "CARG",
     "CWT",
     "PLUG",
-    "APGE",
     "IDYA",
     "CURB",
     "JOE",
@@ -1002,10 +1001,6 @@
     [
       "CARG",
       "CWT"
-    ],
-    [
-      "PLUG",
-      "APGE"
     ],
     [
       "IDYA",

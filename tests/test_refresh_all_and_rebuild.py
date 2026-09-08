@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import date
@@ -53,6 +54,22 @@ def _warehouse(tmp_path: Path) -> Path:
 
 
 def _config(tmp_path: Path, warehouse: Path) -> m0.RefreshConfig:
+    # Real sealing uses disposable source, including when tests run in a Git-free archive.
+    repo = tmp_path / "owner-source"
+    if not repo.exists():
+        repo.mkdir()
+        source = Path(__file__).resolve().parents[1]
+        for name in ("scripts", "clients", "presets"):
+            shutil.copytree(source / name, repo / name,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        for name in ("pyproject.toml", "uv.lock"):
+            shutil.copy2(source / name, repo / name)
+        for arguments in (
+            ["init", "-q"], ["add", "."],
+            ["-c", "user.name=Test", "-c", "user.email=test@example.com",
+             "-c", "commit.gpgsign=false", "commit", "-qm", "fixture owner"],
+        ):
+            subprocess.run(["git", *arguments], cwd=repo, check=True, capture_output=True)
     current = warehouse / "duckdb" / "current"
     return m0.RefreshConfig(
         warehouse=warehouse,
@@ -61,7 +78,7 @@ def _config(tmp_path: Path, warehouse: Path) -> m0.RefreshConfig:
         inventory_path=tmp_path / "m0-pre-refresh-inventory.json",
         as_of=date(2025, 1, 2),
         python=Path("/safe/python"),
-        repo_root=Path(__file__).resolve().parents[1],
+        repo_root=repo,
         bootstrap_current_vxm=False,
     )
 
@@ -151,14 +168,14 @@ def _seed_old_db(config: m0.RefreshConfig) -> bytes:
     return payload
 
 
-def _identity(_root: Path) -> dict[str, str]:
+def _identity(root: Path) -> dict[str, str]:
     return {
         "commit": subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=m0.PROJECT_ROOT, check=True,
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True,
             capture_output=True, text=True,
         ).stdout.strip(),
         "tree": subprocess.run(
-            ["git", "rev-parse", "HEAD^{tree}"], cwd=m0.PROJECT_ROOT, check=True,
+            ["git", "rev-parse", "HEAD^{tree}"], cwd=root, check=True,
             capture_output=True, text=True,
         ).stdout.strip(),
     }

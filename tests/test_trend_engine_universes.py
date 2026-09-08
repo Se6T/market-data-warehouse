@@ -13,6 +13,19 @@ def _tickers(name: str) -> list[str]:
     return [str(symbol) for symbol in payload["tickers"]]
 
 
+def test_cash_acquired_apge_is_absent_from_every_active_projection() -> None:
+    names = (
+        "r2k-health-care.json", "r2k-tier-top-500.json", "r2k-tier-mid-500.json",
+        "r2k.json", "russell-2000-current.json", "trend-engine-all-equity-universe.json",
+    )
+    for name in names:
+        payload = json.loads((PRESETS / name).read_text(encoding="utf-8"))
+        projections = [payload, *payload.get("groups", {}).values()]
+        for projection in projections:
+            assert "APGE" not in projection["tickers"], name
+            assert all("APGE" not in pair for pair in projection.get("pairs", [])), name
+
+
 def test_current_russell_2000_preset_is_exact_sector_union() -> None:
     sector_files = sorted(
         path
@@ -31,8 +44,8 @@ def test_current_russell_2000_preset_is_exact_sector_union() -> None:
     current = _tickers("russell-2000-current.json")
 
     assert len(sector_files) == 11
-    assert len(sector_tickers) == len(set(sector_tickers)) == 1919
-    assert len(current) == len(set(current)) == 1919
+    assert len(sector_tickers) == len(set(sector_tickers)) == 1918
+    assert len(current) == len(set(current)) == 1918
     assert set(current) == set(sector_tickers)
     assert {"MDV", "BBBY", "TALK", "LEG", "RMAX", "TWO", "CRNX", "HLX"}.isdisjoint(
         current
