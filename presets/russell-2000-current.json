@@ -1,7 +1,7 @@
 {
   "name": "russell_2000_current_iwm_holdings",
   "description": "Current Russell 2000 constituent proxy from iShares IWM holdings, merged from 11 sector presets with broker-confirmed inactive symbols removed.",
-  "assembled_on": "2026-09-04",
+  "assembled_on": "2026-09-08",
   "source_holdings_as_of": null,
   "source": "iShares Russell 2000 ETF (IWM) holdings",
   "point_in_time": false,
@@ -134,7 +134,6 @@
     "AOUT",
     "APAM",
     "APEI",
-    "APGE",
     "APLD",
     "APLE",
     "APOG",

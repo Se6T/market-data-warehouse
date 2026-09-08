@@ -1,6 +1,6 @@
 {
   "name": "r2k-tier-top-500",
-  "description": "Russell 2000 R2K Top 500 by weight (499 companies)",
+  "description": "Russell 2000 R2K Top 500 by weight (498 companies)",
   "tickers": [
     "BE",
     "FN",
@@ -354,7 +354,6 @@
     "CARG",
     "CWT",
     "PLUG",
-    "APGE",
     "IDYA",
     "CURB",
     "JOE",
@@ -1202,10 +1201,6 @@
     [
       "CARG",
       "CWT"
-    ],
-    [
-      "PLUG",
-      "APGE"
     ],
     [
       "IDYA",

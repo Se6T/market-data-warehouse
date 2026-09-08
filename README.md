@@ -18,6 +18,21 @@ Market Data Warehouse is designed for storing and analyzing historical **OHLCV d
 
 ### Current Capabilities
 
+Daily Mini VIX (`VXM_YYYYMMDD`) freshness uses the CFE (`XCBF`) business-session
+calendar, in both its owner and atomic publication validation. Holiday extended
+trading is not evidence of a separately dated regular daily bar. For example,
+the September 7, 2026 Labor Day as-of requires September 4; September 8 still
+requires September 8 when requested as a completed as-of. Crypto remains daily,
+and other futures retain their existing session contract. No bars are fabricated.
+See [Cboe's futures hours and holidays](https://www.cboe.com/about/hours/us-futures/).
+
+Current Russell source/union presets exclude APGE following its completed cash
+acquisition; no ABBV replacement is inferred. Existing historical data must be
+preserved outside active bronze before the next normal refresh, after the owner
+release and consumer pins are reviewed. Sources: [AbbVie closing announcement,
+September 3, 2026](https://news.abbvie.com/2026-09-03-AbbVie-Completes-Acquisition-of-Apogee-Therapeutics)
+and [Nasdaq corporate-action alert 2026-607](https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2026-607).
+
 * Daily ingestion for:
 
   * **Equities (IB)**
