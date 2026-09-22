@@ -165,6 +165,60 @@ def _bar_rows(bars: Sequence[object], selected: SelectedContract, as_of: date) -
     return [rows[key] for key in sorted(rows)]
 
 
+def _complete_stored_rows(
+    warehouse: Path, selected: SelectedContract, as_of: date,
+) -> list[dict] | None:
+    """Return canonical rows only when they prove complete through ``as_of``.
+
+    Bronze has no broker ``conId`` provenance column, so reuse is deliberately
+    limited to the canonical identity encoded by the partition, stable contract
+    id, root, and exact expiry.  A complete CFE session sequence is required;
+    malformed, future, or gapped data is not a cache hit and will be refetched.
+    """
+    bronze_root = warehouse / "data-lake" / "bronze" / "asset_class=futures"
+    path = bronze_root / f"symbol={selected.symbol}" / "data.parquet"
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        with BronzeClient(bronze_root, asset_class="futures") as bronze:
+            rows = bronze.read_symbol_rows(selected.symbol)
+        if not rows:
+            return None
+        dates: list[date] = []
+        expected_contract_id = stable_symbol_id(selected.symbol)
+        for row in rows:
+            trade_date = date.fromisoformat(str(row["trade_date"])[:10])
+            dates.append(trade_date)
+            values = tuple(float(row[field]) for field in ("open", "high", "low", "close"))
+            if (
+                row["contract_id"] != expected_contract_id
+                or row["root_symbol"] != ROOT
+                or row["expiry_date"] != selected.expiry_date.isoformat()
+                or trade_date > as_of
+                or not all(math.isfinite(value) and value > 0 for value in values)
+                or values[1] < max(values[0], values[3])
+                or values[2] > min(values[0], values[3])
+                or int(row["volume"]) < 0
+                or int(row["open_interest"]) < 0
+            ):
+                return None
+        if len(set(dates)) != len(dates):
+            return None
+        required = _completed_session(as_of)
+        if max(dates) != required:
+            return None
+        calendar = exchange_calendars.get_calendar("XCBF")
+        expected_dates = {
+            session.date().isoformat()
+            for session in calendar.sessions_in_range(min(dates), required)
+        }
+        if {item.isoformat() for item in dates} != expected_dates:
+            return None
+    except (OSError, KeyError, TypeError, ValueError, OverflowError):
+        return None
+    return rows
+
+
 def _write_mapping(path: Path, document: dict[str, object]) -> None:
     if not path.is_absolute() or not path.parent.is_dir() or path.is_symlink():
         raise VXMRefreshError("mapping path must be an absolute non-symlink")
@@ -206,21 +260,23 @@ def refresh_current_vxm(
         selected = select_current_contract(
             [detail.contract for detail in details], as_of=as_of, roll_days=roll_days,
         )
-        end = (as_of + timedelta(days=1)).strftime("%Y%m%d 23:59:59 UTC")
-        bars = broker.reqHistoricalData(
-            selected.broker_contract,
-            endDateTime=end,
-            durationStr="10 D",
-            barSizeSetting="1 day",
-            whatToShow="TRADES",
-            useRTH=True,
-            formatDate=1,
-            keepUpToDate=False,
-        )
-        rows = _bar_rows(bars, selected, as_of)
         bronze_root = warehouse / "data-lake" / "bronze" / "asset_class=futures"
-        with BronzeClient(bronze_root, asset_class="futures") as bronze:
-            bronze.merge_ticker_rows(selected.symbol, rows)
+        rows = _complete_stored_rows(warehouse, selected, as_of)
+        if rows is None:
+            end = (as_of + timedelta(days=1)).strftime("%Y%m%d 23:59:59 UTC")
+            bars = broker.reqHistoricalData(
+                selected.broker_contract,
+                endDateTime=end,
+                durationStr="10 D",
+                barSizeSetting="1 day",
+                whatToShow="TRADES",
+                useRTH=True,
+                formatDate=1,
+                keepUpToDate=False,
+            )
+            rows = _bar_rows(bars, selected, as_of)
+            with BronzeClient(bronze_root, asset_class="futures") as bronze:
+                bronze.merge_ticker_rows(selected.symbol, rows)
         mapping = {
             "schema_version": 1,
             "root": ROOT,

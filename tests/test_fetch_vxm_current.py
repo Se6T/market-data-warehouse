@@ -225,6 +225,48 @@ def test_refresh_publishes_exact_contract_data_and_mapping_via_read_only_paper(t
     }
 
 
+def test_refresh_reuses_complete_stored_session_when_historical_refetch_fails(tmp_path: Path) -> None:
+    warehouse = tmp_path / "warehouse"
+    contract = _contract(
+        conId=54321,
+        localSymbol="VXMZ6",
+        lastTradeDateOrContractMonth="20261021",
+    )
+    first_broker = _FakeIB(contracts=[contract], bars=[_bar("2026-09-21")])
+    vxm.refresh_current_vxm(
+        warehouse=warehouse,
+        as_of=date(2026, 9, 21),
+        result_json=tmp_path / "first-result.json",
+        mapping_json=tmp_path / "first-mapping.json",
+        roll_days=5,
+        host="127.0.0.1",
+        port=4002,
+        ib_factory=lambda: first_broker,
+    )
+
+    class RefetchFails(_FakeIB):
+        def reqHistoricalData(self, contract, **kwargs):
+            raise RuntimeError("IB error 162: competing session")
+
+    second_broker = RefetchFails(contracts=[contract])
+    selected = vxm.refresh_current_vxm(
+        warehouse=warehouse,
+        as_of=date(2026, 9, 21),
+        result_json=tmp_path / "second-result.json",
+        mapping_json=tmp_path / "second-mapping.json",
+        roll_days=5,
+        host="127.0.0.1",
+        port=4002,
+        ib_factory=lambda: second_broker,
+    )
+
+    assert selected.symbol == "VXM_20261021"
+    assert len(second_broker.history_requests) == 0
+    assert json.loads((tmp_path / "second-result.json").read_text())["results"] == [
+        {"status": "succeeded", "symbol": "VXM_20261021"}
+    ]
+
+
 def test_refresh_fails_closed_without_completed_bar_or_on_nonpaper_port(tmp_path: Path) -> None:
     with pytest.raises(vxm.VXMRefreshError, match="PAPER port 4002"):
         vxm.refresh_current_vxm(
