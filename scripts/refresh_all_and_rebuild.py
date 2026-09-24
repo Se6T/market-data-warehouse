@@ -969,8 +969,7 @@ def _validate_post_inventory(
             continue
         expected = expected_latest_session(current.asset_class, as_of, current.symbol).isoformat()
         if (
-            not refresh_broker_assets
-            and current.asset_class == "volatility"
+            current.asset_class == "volatility"
             and current.latest_session != expected
         ):
             prior = date.fromisoformat(expected) - timedelta(days=1)
