@@ -374,20 +374,40 @@ def test_preserved_broker_inventory_may_remain_stale_but_not_regress() -> None:
 
 
 def test_offline_public_refresh_accepts_one_session_cboe_publication_lag() -> None:
+    """CBOE's public files publish the prior session on a lag independent of
+    whether IB-sourced assets were refreshed in the same run; the publisher
+    must therefore tolerate the one-session lag on every path, matching the
+    portfolio-engine reader's own ``public_lag`` admission rule."""
     entry = m0.InventoryEntry(
         "volatility", "VIX", "asset_class=volatility/symbol=VIX/data.parquet",
         "0" * 64, 1, "2026-08-20", stable_symbol_id("VIX"),
         m0.SYMBOL_SCHEMA, "1" * 64,
     )
 
+    # Online run (IB assets refreshed): lagged CBOE publication still accepted.
+    m0._validate_post_inventory(
+        [entry],
+        [entry],
+        date(2026, 8, 21),
+    )
+    # Offline run: unchanged behavior.
     m0._validate_post_inventory(
         [entry],
         [entry],
         date(2026, 8, 21),
         refresh_broker_assets=False,
     )
+    # Beyond one session of lag both paths still fail closed.
+    stale = m0.replace(entry, latest_session="2026-08-19")
     with pytest.raises(m0.RefreshFailure, match="expected latest session"):
-        m0._validate_post_inventory([entry], [entry], date(2026, 8, 21))
+        m0._validate_post_inventory([stale], [stale], date(2026, 8, 21))
+    with pytest.raises(m0.RefreshFailure, match="expected latest session"):
+        m0._validate_post_inventory(
+            [stale],
+            [stale],
+            date(2026, 8, 21),
+            refresh_broker_assets=False,
+        )
 
     friday = m0.replace(entry, latest_session="2026-08-21")
     m0._validate_post_inventory(
