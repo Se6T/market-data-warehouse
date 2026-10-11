@@ -21,7 +21,7 @@ jobs:
         run: uv python install 3.12
       - name: Sync locked dependencies
         run: uv sync --frozen --group dev
-      - name: Full tests and 100% coverage
+      - name: Full tests and 99% minimum coverage
         run: >-
           env -u PYTHONPATH uv run python -m pytest tests -q
           --cov=clients --cov=scripts --cov-report=term-missing
