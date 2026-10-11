@@ -66,6 +66,14 @@ class DailyBarFallbackClient:
         self._min_interval_seconds = min_interval_seconds
         self._last_request_monotonic = 0.0
         self._session = session or requests.Session()
+        # These caches deliberately live only for this client instance.  A
+        # failed provider request is cached as ``None`` so one batch does not
+        # repeat the same terminal retry sequence for every target date;
+        # constructing the next scheduled client starts fresh.
+        self._nasdaq_history_cache: dict[
+            tuple[str, str], tuple[date, dict | None]
+        ] = {}
+        self._stooq_history_cache: dict[str, str | None] = {}
         self._session.headers.update(
             {
                 "Accept": "application/json,text/csv,*/*",
@@ -106,14 +114,20 @@ class DailyBarFallbackClient:
         # The Nasdaq API returns rows newest-first, bounded by `limit`, with
         # `fromdate` merely anchoring the oldest allowed date. To reach an
         # older target date the request must page the full record count.
-        payload = self._get_json(
-            f"{_NASDAQ_BASE_URL}/{symbol}/historical",
-            params={
-                "assetclass": asset_class,
-                "fromdate": trade_date.isoformat(),
-                "limit": "10000",
-            },
-        )
+        cache_key = (symbol, asset_class)
+        cached = self._nasdaq_history_cache.get(cache_key)
+        if cached is not None and trade_date >= cached[0]:
+            payload = cached[1]
+        else:
+            payload = self._get_json(
+                f"{_NASDAQ_BASE_URL}/{symbol}/historical",
+                params={
+                    "assetclass": asset_class,
+                    "fromdate": trade_date.isoformat(),
+                    "limit": "10000",
+                },
+            )
+            self._nasdaq_history_cache[cache_key] = (trade_date, payload)
         if payload is None:
             return None
         if payload.get("status", {}).get("rCode") != 200:
@@ -136,7 +150,14 @@ class DailyBarFallbackClient:
         return None
 
     def _fetch_stooq_bar(self, symbol: str, trade_date: date) -> FallbackDailyBar | None:
-        text = self._get_text(_STOOQ_DAILY_URL, params={"s": f"{symbol.lower()}.us", "i": "d"})
+        if symbol in self._stooq_history_cache:
+            text = self._stooq_history_cache[symbol]
+        else:
+            text = self._get_text(
+                _STOOQ_DAILY_URL,
+                params={"s": f"{symbol.lower()}.us", "i": "d"},
+            )
+            self._stooq_history_cache[symbol] = text
         if not text:
             return None
 
