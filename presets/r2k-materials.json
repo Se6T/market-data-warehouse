@@ -1,257 +1,283 @@
 {
   "name": "r2k-materials",
-  "description": "Russell 2000 Materials (82 companies)",
+  "description": "Russell 2000 Materials (90 companies)",
   "tickers": [
-    "CDE",
-    "HL",
     "CMC",
     "SSRM",
-    "BCPC",
-    "KNF",
-    "HCC",
-    "SXT",
-    "CBT",
-    "NG",
-    "AVNT",
-    "CSTM",
-    "FUL",
-    "PRM",
     "MTRN",
-    "HWKN",
-    "PPTA",
-    "CENX",
-    "CC",
-    "NGVT",
-    "MTX",
-    "AMR",
-    "KALU",
-    "KWR",
-    "OI",
-    "IOSP",
-    "GEF",
-    "IE",
+    "SXT",
+    "BCPC",
+    "HCC",
+    "PRM",
+    "CBT",
+    "AVNT",
+    "ASH",
+    "CSTM",
+    "KNF",
+    "FUL",
     "USAR",
-    "SLVM",
-    "USLM",
-    "ECVT",
-    "WS",
-    "TRS",
-    "RYZ",
-    "UAMY",
+    "CENX",
+    "HWKN",
+    "NGVT",
+    "KALU",
+    "IOSP",
+    "KWR",
+    "CC",
+    "GEF",
+    "MTX",
+    "NG",
+    "AMR",
+    "PPTA",
+    "HUN",
     "SCL",
-    "TROX",
-    "CMP",
-    "PCT",
+    "USLM",
+    "IE",
+    "RYZ",
     "MYE",
-    "KOP",
-    "RYAM",
-    "LXU",
-    "AMBP",
-    "METC",
-    "MTUS",
-    "GSM",
-    "IDR",
-    "DC",
-    "NB",
-    "MATV",
+    "WS",
+    "FMC",
+    "SLVM",
+    "ECVT",
+    "TRS",
+    "HYMC",
+    "OI",
+    "MUX",
     "SXC",
-    "ASIX",
-    "ASPI",
-    "CMCL",
+    "KOP",
+    "CMP",
+    "MTUS",
+    "DC",
+    "MATV",
+    "AMBP",
+    "PCT",
+    "LXU",
+    "ELE",
+    "GEF.B",
     "CRML",
-    "TTAM",
-    "GEFB",
-    "ABAT",
-    "MAGN",
-    "IPI",
-    "VOXR",
+    "UAMY",
+    "GSM",
+    "NB",
+    "TROX",
+    "ASIX",
+    "ALOY",
+    "RYAM",
     "CTGO",
-    "OEC",
+    "CMCL",
+    "IDR",
     "FTK",
-    "PACK",
-    "TG",
-    "USAU",
-    "CLW",
+    "ASPI",
+    "MAGN",
     "ASPN",
+    "VGZ",
+    "METC",
+    "IPI",
+    "TTAM",
+    "OEC",
+    "SSMR",
+    "VOXR",
+    "CLW",
+    "FRD",
+    "ALTO",
+    "ABAT",
+    "USAU",
+    "TG",
+    "PACK",
     "CMT",
     "KRO",
+    "AP",
     "LZM",
-    "AVD",
     "SMID",
-    "ARQ",
-    "FRD",
-    "ACNT",
     "VHI",
-    "SLSN",
-    "TSEOF"
+    "SBMT",
+    "REA",
+    "USGO",
+    "METCB"
   ],
   "pairs": [
-    [
-      "CDE",
-      "HL"
-    ],
     [
       "CMC",
       "SSRM"
     ],
     [
-      "BCPC",
-      "KNF"
-    ],
-    [
-      "HCC",
+      "MTRN",
       "SXT"
     ],
     [
-      "CBT",
-      "NG"
+      "BCPC",
+      "HCC"
+    ],
+    [
+      "PRM",
+      "CBT"
     ],
     [
       "AVNT",
-      "CSTM"
+      "ASH"
+    ],
+    [
+      "CSTM",
+      "KNF"
     ],
     [
       "FUL",
-      "PRM"
+      "USAR"
     ],
     [
-      "MTRN",
+      "CENX",
       "HWKN"
     ],
     [
-      "PPTA",
-      "CENX"
+      "NGVT",
+      "KALU"
     ],
     [
-      "CC",
-      "NGVT"
-    ],
-    [
-      "MTX",
-      "AMR"
-    ],
-    [
-      "KALU",
+      "IOSP",
       "KWR"
     ],
     [
-      "OI",
-      "IOSP"
+      "CC",
+      "GEF"
     ],
     [
-      "GEF",
-      "IE"
+      "MTX",
+      "NG"
     ],
     [
-      "USAR",
-      "SLVM"
+      "AMR",
+      "PPTA"
+    ],
+    [
+      "HUN",
+      "SCL"
     ],
     [
       "USLM",
-      "ECVT"
-    ],
-    [
-      "WS",
-      "TRS"
+      "IE"
     ],
     [
       "RYZ",
-      "UAMY"
+      "MYE"
     ],
     [
-      "SCL",
-      "TROX"
+      "WS",
+      "FMC"
     ],
     [
-      "CMP",
-      "PCT"
+      "SLVM",
+      "ECVT"
     ],
     [
-      "MYE",
-      "KOP"
+      "TRS",
+      "HYMC"
     ],
     [
-      "RYAM",
-      "LXU"
-    ],
-    [
-      "AMBP",
-      "METC"
-    ],
-    [
-      "MTUS",
-      "GSM"
-    ],
-    [
-      "IDR",
-      "DC"
-    ],
-    [
-      "NB",
-      "MATV"
+      "OI",
+      "MUX"
     ],
     [
       "SXC",
-      "ASIX"
+      "KOP"
     ],
     [
-      "ASPI",
-      "CMCL"
+      "CMP",
+      "MTUS"
     ],
     [
-      "CRML",
-      "TTAM"
+      "DC",
+      "MATV"
     ],
     [
-      "GEFB",
-      "ABAT"
+      "AMBP",
+      "PCT"
     ],
     [
-      "MAGN",
-      "IPI"
+      "LXU",
+      "ELE"
     ],
     [
-      "VOXR",
+      "GEF.B",
+      "CRML"
+    ],
+    [
+      "UAMY",
+      "GSM"
+    ],
+    [
+      "NB",
+      "TROX"
+    ],
+    [
+      "ASIX",
+      "ALOY"
+    ],
+    [
+      "RYAM",
       "CTGO"
     ],
     [
+      "CMCL",
+      "IDR"
+    ],
+    [
+      "FTK",
+      "ASPI"
+    ],
+    [
+      "MAGN",
+      "ASPN"
+    ],
+    [
+      "VGZ",
+      "METC"
+    ],
+    [
+      "IPI",
+      "TTAM"
+    ],
+    [
       "OEC",
-      "FTK"
+      "SSMR"
     ],
     [
-      "PACK",
-      "TG"
-    ],
-    [
-      "USAU",
+      "VOXR",
       "CLW"
     ],
     [
-      "ASPN",
-      "CMT"
+      "FRD",
+      "ALTO"
     ],
     [
-      "KRO",
+      "ABAT",
+      "USAU"
+    ],
+    [
+      "TG",
+      "PACK"
+    ],
+    [
+      "CMT",
+      "KRO"
+    ],
+    [
+      "AP",
       "LZM"
     ],
     [
-      "AVD",
-      "SMID"
-    ],
-    [
-      "ARQ",
-      "FRD"
-    ],
-    [
-      "ACNT",
+      "SMID",
       "VHI"
     ],
     [
-      "SLSN",
-      "TSEOF"
+      "SBMT",
+      "REA"
+    ],
+    [
+      "USGO",
+      "METCB"
     ]
   ],
   "sector": "Materials",
   "vol_driver": "Russell 2000 Materials \u2014 small-cap sector fundamentals",
-  "source": "iShares Russell 2000 ETF (IWM) holdings"
+  "source": "iShares Russell 2000 ETF (IWM) holdings",
+  "assembled_on": "2026-10-11",
+  "source_holdings_as_of": "2026-10-08"
 }

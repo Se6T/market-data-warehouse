@@ -1,303 +1,295 @@
 {
   "name": "r2k-real-estate",
-  "description": "Russell 2000 Real Estate (97 companies)",
+  "description": "Russell 2000 Real Estate (94 companies)",
   "tickers": [
     "CTRE",
-    "AHR",
-    "EPRT",
-    "TRNO",
     "RHP",
     "COMP",
-    "KRG",
+    "TRNO",
     "MAC",
+    "EPRT",
+    "KRG",
     "PECO",
     "SBRA",
     "OUT",
-    "SKT",
-    "IRT",
-    "NHI",
     "CDP",
-    "BNL",
-    "SLG",
-    "LXP",
+    "SKT",
     "APLE",
-    "AKR",
+    "BNL",
+    "LXP",
+    "IRT",
+    "SLG",
+    "HIW",
+    "NHI",
+    "PK",
     "CURB",
+    "CWK",
+    "DRH",
+    "AKR",
     "JOE",
     "UE",
     "FCPT",
-    "IVT",
-    "NMRK",
-    "DRH",
-    "GNL",
-    "CWK",
-    "GTY",
-    "SHO",
-    "NTST",
-    "LTC",
-    "DHC",
-    "IIPR",
     "PEB",
-    "ALEX",
-    "XHR",
-    "VRE",
-    "SILA",
-    "DEI",
-    "KW",
-    "UMH",
-    "RLJ",
-    "AAT",
+    "LTC",
+    "OPEN",
+    "IVT",
+    "SHO",
+    "NMRK",
     "SMA",
-    "CSR",
-    "DEA",
+    "XHR",
+    "DHC",
+    "NTST",
+    "GNL",
+    "BXDC",
+    "GTY",
+    "RLJ",
+    "IIPR",
+    "UMH",
+    "DEI",
     "PDM",
-    "JBGS",
-    "SAFE",
-    "ESRT",
-    "PKST",
+    "AAT",
+    "DEA",
     "CBL",
-    "WSR",
-    "MMI",
-    "NXRT",
-    "EXPI",
-    "CTO",
-    "UHT",
-    "FOR",
-    "GOOD",
-    "BDN",
-    "FPI",
-    "AHRT",
-    "INN",
-    "ALX",
-    "CHCT",
-    "PSTL",
-    "XRN",
-    "OLP",
-    "HPP",
-    "CLDT",
-    "LAND",
-    "BFS",
-    "TRC",
+    "CSR",
     "SVC",
-    "REAX",
+    "CTO",
+    "SAFE",
+    "MMI",
+    "ESRT",
+    "JBGS",
+    "HPP",
+    "INN",
+    "CLDT",
+    "GOOD",
+    "PSTL",
+    "ALX",
+    "FOR",
+    "UHT",
+    "AHRT",
+    "BDN",
+    "NHP",
+    "NXRT",
+    "FPI",
+    "XRN",
     "ILPT",
-    "FVR",
-    "SITC",
+    "REAX",
+    "OLP",
+    "LAND",
+    "AGNT",
+    "BFS",
+    "CHCT",
+    "TRC",
     "RMR",
-    "FRPH",
+    "FVR",
     "PINE",
-    "NLOP",
-    "STRS",
+    "FRPH",
     "NXDT",
-    "DOUG",
-    "BRT",
-    "BHR",
+    "SITC",
     "SEG",
+    "NLOP",
+    "BRT",
+    "DOUG",
     "MLP",
+    "ONL",
     "STRW",
-    "FSP",
+    "BHR",
     "TCI",
-    "CLPR",
+    "CHCI",
     "ARL"
   ],
   "pairs": [
     [
       "CTRE",
-      "AHR"
+      "RHP"
     ],
     [
-      "EPRT",
+      "COMP",
       "TRNO"
     ],
     [
-      "RHP",
-      "COMP"
+      "MAC",
+      "EPRT"
     ],
     [
       "KRG",
-      "MAC"
+      "PECO"
     ],
     [
-      "PECO",
-      "SBRA"
-    ],
-    [
-      "OUT",
-      "SKT"
-    ],
-    [
-      "IRT",
-      "NHI"
+      "SBRA",
+      "OUT"
     ],
     [
       "CDP",
-      "BNL"
-    ],
-    [
-      "SLG",
-      "LXP"
+      "SKT"
     ],
     [
       "APLE",
-      "AKR"
+      "BNL"
+    ],
+    [
+      "LXP",
+      "IRT"
+    ],
+    [
+      "SLG",
+      "HIW"
+    ],
+    [
+      "NHI",
+      "PK"
     ],
     [
       "CURB",
-      "JOE"
-    ],
-    [
-      "UE",
-      "FCPT"
-    ],
-    [
-      "IVT",
-      "NMRK"
+      "CWK"
     ],
     [
       "DRH",
-      "GNL"
+      "AKR"
     ],
     [
-      "CWK",
-      "GTY"
+      "JOE",
+      "UE"
     ],
     [
-      "SHO",
-      "NTST"
-    ],
-    [
-      "LTC",
-      "DHC"
-    ],
-    [
-      "IIPR",
+      "FCPT",
       "PEB"
     ],
     [
-      "ALEX",
-      "XHR"
+      "LTC",
+      "OPEN"
     ],
     [
-      "VRE",
-      "SILA"
+      "IVT",
+      "SHO"
     ],
     [
-      "DEI",
-      "KW"
-    ],
-    [
-      "UMH",
-      "RLJ"
-    ],
-    [
-      "AAT",
+      "NMRK",
       "SMA"
     ],
     [
-      "CSR",
-      "DEA"
+      "XHR",
+      "DHC"
+    ],
+    [
+      "NTST",
+      "GNL"
+    ],
+    [
+      "BXDC",
+      "GTY"
+    ],
+    [
+      "RLJ",
+      "IIPR"
+    ],
+    [
+      "UMH",
+      "DEI"
     ],
     [
       "PDM",
-      "JBGS"
+      "AAT"
     ],
     [
-      "SAFE",
-      "ESRT"
-    ],
-    [
-      "PKST",
+      "DEA",
       "CBL"
     ],
     [
-      "WSR",
-      "MMI"
-    ],
-    [
-      "NXRT",
-      "EXPI"
+      "CSR",
+      "SVC"
     ],
     [
       "CTO",
-      "UHT"
+      "SAFE"
     ],
     [
-      "FOR",
-      "GOOD"
+      "MMI",
+      "ESRT"
     ],
     [
-      "BDN",
-      "FPI"
-    ],
-    [
-      "AHRT",
-      "INN"
-    ],
-    [
-      "ALX",
-      "CHCT"
-    ],
-    [
-      "PSTL",
-      "XRN"
-    ],
-    [
-      "OLP",
+      "JBGS",
       "HPP"
     ],
     [
-      "CLDT",
-      "LAND"
+      "INN",
+      "CLDT"
+    ],
+    [
+      "GOOD",
+      "PSTL"
+    ],
+    [
+      "ALX",
+      "FOR"
+    ],
+    [
+      "UHT",
+      "AHRT"
+    ],
+    [
+      "BDN",
+      "NHP"
+    ],
+    [
+      "NXRT",
+      "FPI"
+    ],
+    [
+      "XRN",
+      "ILPT"
+    ],
+    [
+      "REAX",
+      "OLP"
+    ],
+    [
+      "LAND",
+      "AGNT"
     ],
     [
       "BFS",
-      "TRC"
+      "CHCT"
     ],
     [
-      "SVC",
-      "REAX"
-    ],
-    [
-      "ILPT",
-      "FVR"
-    ],
-    [
-      "SITC",
+      "TRC",
       "RMR"
     ],
     [
-      "FRPH",
+      "FVR",
       "PINE"
     ],
     [
+      "FRPH",
+      "NXDT"
+    ],
+    [
+      "SITC",
+      "SEG"
+    ],
+    [
       "NLOP",
-      "STRS"
+      "BRT"
     ],
     [
-      "NXDT",
-      "DOUG"
-    ],
-    [
-      "BRT",
-      "BHR"
-    ],
-    [
+      "DOUG",
       "MLP"
     ],
     [
-      "STRW",
-      "FSP"
+      "ONL",
+      "STRW"
     ],
     [
-      "TCI",
-      "CLPR"
+      "BHR",
+      "TCI"
     ],
     [
-      "ARL",
-      "CTRE"
+      "CHCI",
+      "ARL"
     ]
   ],
   "sector": "Real Estate",
-  "vol_driver": "Russell 2000 Real Estate — small-cap sector fundamentals",
-  "source": "iShares Russell 2000 ETF (IWM) holdings"
+  "vol_driver": "Russell 2000 Real Estate \u2014 small-cap sector fundamentals",
+  "source": "iShares Russell 2000 ETF (IWM) holdings",
+  "assembled_on": "2026-10-11",
+  "source_holdings_as_of": "2026-10-08"
 }

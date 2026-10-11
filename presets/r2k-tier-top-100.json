@@ -2,310 +2,312 @@
   "name": "r2k-tier-top-100",
   "description": "Russell 2000 R2K Top 100 by weight (most liquid) (100 companies)",
   "tickers": [
-    "BE",
-    "FN",
-    "KTOS",
-    "CRDO",
-    "SATS",
-    "CDE",
-    "NXT",
-    "HL",
-    "IONQ",
-    "STRL",
-    "AEIS",
-    "ENSG",
-    "GH",
-    "MOD",
-    "DY",
-    "TTMI",
-    "SPXC",
-    "BBIO",
-    "RMBS",
-    "IDCC",
-    "MOGA",
-    "GTLS",
-    "CTRE",
-    "AHR",
-    "WTS",
+    "BTSG",
+    "FROG",
+    "MOG.A",
+    "TWST",
     "UMBF",
-    "ARWR",
-    "AVAV",
-    "ONB",
-    "SITM",
-    "JBTM",
-    "MDGL",
-    "PRAX",
-    "CMC",
-    "SMTC",
-    "PRIM",
-    "FLR",
-    "JXN",
-    "FCFS",
-    "IBP",
-    "ZWS",
-    "TEX",
-    "PCVX",
-    "SANM",
-    "ESE",
-    "CYTK",
-    "FORM",
-    "VIAV",
-    "UEC",
-    "OKLO",
-    "FSS",
-    "HQY",
-    "EPRT",
-    "APLD",
-    "SSRM",
-    "AXSM",
-    "TRNO",
-    "SLAB",
-    "LUMN",
-    "GATX",
-    "ORA",
-    "CWAN",
-    "KRYS",
     "GKOS",
-    "ROAD",
-    "AROC",
-    "QBTS",
-    "ENS",
-    "AGX",
-    "PL",
-    "RHP",
-    "VLY",
-    "POR",
-    "TMHC",
-    "EAT",
-    "COMP",
-    "SNEX",
-    "VSEC",
-    "AAOI",
     "SM",
-    "TXNM",
-    "BCPC",
-    "RIG",
-    "BIPC",
+    "TXG",
+    "PBF",
+    "ONB",
+    "FCFS",
     "VSAT",
-    "VAL",
+    "CTRE",
+    "PTGX",
+    "IDCC",
+    "PCVX",
+    "KRYS",
+    "CYTK",
+    "EAT",
+    "HUT",
+    "MXL",
+    "RHP",
+    "OSCR",
+    "JXN",
+    "HQY",
+    "TGTX",
+    "ZETA",
+    "SLAB",
+    "ACA",
+    "FLR",
+    "CMC",
+    "PLXS",
+    "SSRM",
+    "COMP",
+    "ZWS",
+    "MATX",
+    "QLYS",
+    "TRNO",
+    "FSS",
+    "KYMR",
+    "ESE",
+    "ALKS",
+    "NPO",
+    "ENS",
+    "PRAX",
+    "SNEX",
+    "LNTH",
+    "TXNM",
+    "CVLT",
+    "LTH",
+    "VSXY",
+    "VLY",
+    "MAC",
+    "ANF",
     "SWX",
-    "CWST",
-    "GBCI",
-    "UBSI",
-    "GVA",
-    "NE",
-    "RIOT",
-    "UFPI",
-    "KRG",
+    "SYRE",
+    "TEX",
+    "HIMS",
     "HWC",
+    "RIOT",
+    "BKH",
+    "UBSI",
+    "LGND",
+    "MGY",
+    "MTRN",
+    "GBCI",
+    "GATX",
     "ESNT",
-    "BOOT",
-    "RGTI",
-    "BKH"
+    "SXT",
+    "FTDR",
+    "HOMB",
+    "VRNS",
+    "EPRT",
+    "JBTM",
+    "ORA",
+    "XMTR",
+    "KGS",
+    "HAE",
+    "BCPC",
+    "AGX",
+    "GRAL",
+    "RIG",
+    "NE",
+    "POR",
+    "LUMN",
+    "QBTS",
+    "AUB",
+    "MUR",
+    "CWST",
+    "PI",
+    "ACIW",
+    "SIGI",
+    "AROC",
+    "IOVA",
+    "NJR",
+    "RYTM",
+    "PTCT",
+    "INSW",
+    "GVA",
+    "ABCB"
   ],
   "pairs": [
     [
-      "BE",
-      "FN"
+      "BTSG",
+      "FROG"
     ],
     [
-      "KTOS",
-      "CRDO"
+      "MOG.A",
+      "TWST"
     ],
     [
-      "SATS",
-      "CDE"
-    ],
-    [
-      "NXT",
-      "HL"
-    ],
-    [
-      "IONQ",
-      "STRL"
-    ],
-    [
-      "AEIS",
-      "ENSG"
-    ],
-    [
-      "GH",
-      "MOD"
-    ],
-    [
-      "DY",
-      "TTMI"
-    ],
-    [
-      "SPXC",
-      "BBIO"
-    ],
-    [
-      "RMBS",
-      "IDCC"
-    ],
-    [
-      "MOGA",
-      "GTLS"
-    ],
-    [
-      "CTRE",
-      "AHR"
-    ],
-    [
-      "WTS",
-      "UMBF"
-    ],
-    [
-      "ARWR",
-      "AVAV"
-    ],
-    [
-      "ONB",
-      "SITM"
-    ],
-    [
-      "JBTM",
-      "MDGL"
-    ],
-    [
-      "PRAX",
-      "CMC"
-    ],
-    [
-      "SMTC",
-      "PRIM"
-    ],
-    [
-      "FLR",
-      "JXN"
-    ],
-    [
-      "FCFS",
-      "IBP"
-    ],
-    [
-      "ZWS",
-      "TEX"
-    ],
-    [
-      "PCVX",
-      "SANM"
-    ],
-    [
-      "ESE",
-      "CYTK"
-    ],
-    [
-      "FORM",
-      "VIAV"
-    ],
-    [
-      "UEC",
-      "OKLO"
-    ],
-    [
-      "FSS",
-      "HQY"
-    ],
-    [
-      "EPRT",
-      "APLD"
-    ],
-    [
-      "SSRM",
-      "AXSM"
-    ],
-    [
-      "TRNO",
-      "SLAB"
-    ],
-    [
-      "LUMN",
-      "GATX"
-    ],
-    [
-      "ORA",
-      "CWAN"
-    ],
-    [
-      "KRYS",
+      "UMBF",
       "GKOS"
     ],
     [
-      "ROAD",
-      "AROC"
+      "SM",
+      "TXG"
     ],
     [
-      "QBTS",
-      "ENS"
+      "PBF",
+      "ONB"
     ],
     [
-      "AGX",
-      "PL"
+      "FCFS",
+      "VSAT"
     ],
     [
-      "RHP",
-      "VLY"
+      "CTRE",
+      "PTGX"
     ],
     [
-      "POR",
-      "TMHC"
+      "IDCC",
+      "PCVX"
+    ],
+    [
+      "KRYS",
+      "CYTK"
     ],
     [
       "EAT",
+      "HUT"
+    ],
+    [
+      "MXL",
+      "RHP"
+    ],
+    [
+      "OSCR",
+      "JXN"
+    ],
+    [
+      "HQY",
+      "TGTX"
+    ],
+    [
+      "ZETA",
+      "SLAB"
+    ],
+    [
+      "ACA",
+      "FLR"
+    ],
+    [
+      "CMC",
+      "PLXS"
+    ],
+    [
+      "SSRM",
       "COMP"
     ],
     [
-      "SNEX",
-      "VSEC"
+      "ZWS",
+      "MATX"
     ],
     [
-      "AAOI",
-      "SM"
+      "QLYS",
+      "TRNO"
     ],
     [
-      "TXNM",
-      "BCPC"
+      "FSS",
+      "KYMR"
     ],
     [
-      "RIG",
-      "BIPC"
+      "ESE",
+      "ALKS"
     ],
     [
-      "VSAT",
-      "VAL"
+      "NPO",
+      "ENS"
+    ],
+    [
+      "PRAX",
+      "SNEX"
+    ],
+    [
+      "LNTH",
+      "TXNM"
+    ],
+    [
+      "CVLT",
+      "LTH"
+    ],
+    [
+      "VSXY",
+      "VLY"
+    ],
+    [
+      "MAC",
+      "ANF"
     ],
     [
       "SWX",
-      "CWST"
+      "SYRE"
     ],
     [
-      "GBCI",
+      "TEX",
+      "HIMS"
+    ],
+    [
+      "HWC",
+      "RIOT"
+    ],
+    [
+      "BKH",
       "UBSI"
     ],
     [
+      "LGND",
+      "MGY"
+    ],
+    [
+      "MTRN",
+      "GBCI"
+    ],
+    [
+      "GATX",
+      "ESNT"
+    ],
+    [
+      "SXT",
+      "FTDR"
+    ],
+    [
+      "HOMB",
+      "VRNS"
+    ],
+    [
+      "EPRT",
+      "JBTM"
+    ],
+    [
+      "ORA",
+      "XMTR"
+    ],
+    [
+      "KGS",
+      "HAE"
+    ],
+    [
+      "BCPC",
+      "AGX"
+    ],
+    [
+      "GRAL",
+      "RIG"
+    ],
+    [
+      "NE",
+      "POR"
+    ],
+    [
+      "LUMN",
+      "QBTS"
+    ],
+    [
+      "AUB",
+      "MUR"
+    ],
+    [
+      "CWST",
+      "PI"
+    ],
+    [
+      "ACIW",
+      "SIGI"
+    ],
+    [
+      "AROC",
+      "IOVA"
+    ],
+    [
+      "NJR",
+      "RYTM"
+    ],
+    [
+      "PTCT",
+      "INSW"
+    ],
+    [
       "GVA",
-      "NE"
-    ],
-    [
-      "RIOT",
-      "UFPI"
-    ],
-    [
-      "KRG",
-      "HWC"
-    ],
-    [
-      "ESNT",
-      "BOOT"
-    ],
-    [
-      "RGTI",
-      "BKH"
+      "ABCB"
     ]
   ],
   "sector": "Multi-Sector",
   "vol_driver": "Small-cap factor exposure \u2014 top 100 by weight (most liquid)",
-  "source": "iShares Russell 2000 ETF (IWM) holdings"
+  "source": "iShares Russell 2000 ETF (IWM) holdings",
+  "assembled_on": "2026-10-11",
+  "source_holdings_as_of": "2026-10-08"
 }

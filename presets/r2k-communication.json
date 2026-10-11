@@ -1,243 +1,236 @@
 {
   "name": "r2k-communication",
-  "description": "Russell 2000 Communication (77 companies)",
+  "description": "Russell 2000 Communication (75 companies)",
   "tickers": [
-    "SATS",
     "LUMN",
-    "TDS",
-    "TGNA",
-    "SPHR",
-    "GSAT",
     "CNK",
-    "CARG",
-    "MSGE",
     "MGNI",
+    "TDS",
+    "MSGE",
+    "SPHR",
+    "AMC",
     "BATRK",
-    "LION",
     "IMAX",
-    "ZD",
-    "YELP",
-    "UNIT",
+    "LION",
+    "CARG",
     "WLY",
-    "TRIP",
-    "CCOI",
-    "LILAK",
-    "TDAY",
+    "ZD",
+    "DV",
+    "BAND",
+    "STUB",
     "IDT",
+    "DJT",
+    "UNIT",
+    "LILAK",
+    "YELP",
+    "TRIP",
+    "RUM",
+    "TDAY",
+    "CCO",
+    "GTM",
+    "STGW",
+    "ATEX",
+    "QNST",
+    "GLIBK",
+    "PUBM",
+    "MCS",
+    "EVER",
+    "NXDR",
+    "SBGI",
     "SHEN",
     "SCHL",
-    "QNST",
-    "AMC",
-    "SBGI",
-    "RUM",
-    "CABO",
-    "STGW",
-    "GTN",
-    "EVER",
-    "BAND",
-    "CARS",
-    "SSTK",
-    "FUBO",
-    "OPTU",
-    "GOGO",
-    "MCS",
-    "ATEX",
-    "BATRA",
-    "IHRT",
-    "GRND",
-    "NXDR",
-    "MAX",
     "NMAX",
-    "IBTA",
-    "PUBM",
-    "ANGI",
-    "ATNI",
-    "BOC",
-    "SSP",
-    "AMCX",
-    "LILA",
-    "NCMI",
-    "NEXN",
-    "SPOK",
-    "BMBL",
-    "RSVR",
+    "CCOI",
+    "TBLA",
     "EVC",
-    "WBTN",
+    "GTN",
+    "CARS",
+    "MNTN",
+    "IBTA",
+    "BATRA",
+    "GRND",
+    "LFTO",
+    "AMCX",
+    "MAX",
+    "NEXN",
     "STRZ",
-    "PLTK",
-    "CURI",
+    "ATNI",
+    "FUBO",
+    "LILA",
+    "BOC",
+    "BMBL",
     "ZIP",
-    "THRY",
-    "TTGT",
-    "GETY",
-    "GAMB",
-    "EEX",
+    "IHRT",
+    "OPTU",
+    "WBTN",
+    "SPOK",
+    "ANGI",
+    "RSVR",
+    "GOGO",
+    "SSP",
+    "NCMI",
+    "PLTK",
     "ADV",
-    "GAIA",
-    "MYPS",
-    "TZOO",
-    "TEAD",
-    "SEAT",
-    "MRDN"
+    "CURI",
+    "SSTK",
+    "TTGT",
+    "GLIBA",
+    "CABO",
+    "LEE"
   ],
   "pairs": [
     [
-      "SATS",
-      "LUMN"
+      "LUMN",
+      "CNK"
     ],
     [
-      "TDS",
-      "TGNA"
-    ],
-    [
-      "SPHR",
-      "GSAT"
-    ],
-    [
-      "CNK",
-      "CARG"
+      "MGNI",
+      "TDS"
     ],
     [
       "MSGE",
-      "MGNI"
+      "SPHR"
     ],
     [
-      "BATRK",
-      "LION"
+      "AMC",
+      "BATRK"
     ],
     [
       "IMAX",
-      "ZD"
+      "LION"
     ],
     [
-      "YELP",
-      "UNIT"
+      "CARG",
+      "WLY"
     ],
     [
-      "WLY",
-      "TRIP"
-    ],
-    [
-      "CCOI",
-      "LILAK"
-    ],
-    [
-      "TDAY",
-      "IDT"
-    ],
-    [
-      "SHEN",
-      "SCHL"
-    ],
-    [
-      "QNST",
-      "AMC"
-    ],
-    [
-      "SBGI",
-      "RUM"
-    ],
-    [
-      "CABO",
-      "STGW"
-    ],
-    [
-      "GTN",
-      "EVER"
+      "ZD",
+      "DV"
     ],
     [
       "BAND",
-      "CARS"
+      "STUB"
     ],
     [
-      "SSTK",
-      "FUBO"
+      "IDT",
+      "DJT"
     ],
     [
-      "OPTU",
-      "GOGO"
+      "UNIT",
+      "LILAK"
     ],
     [
-      "MCS",
+      "YELP",
+      "TRIP"
+    ],
+    [
+      "RUM",
+      "TDAY"
+    ],
+    [
+      "CCO",
+      "GTM"
+    ],
+    [
+      "STGW",
       "ATEX"
     ],
     [
-      "BATRA",
-      "IHRT"
-    ],
-    [
-      "GRND",
-      "NXDR"
-    ],
-    [
-      "MAX",
-      "NMAX"
-    ],
-    [
-      "IBTA"
+      "QNST",
+      "GLIBK"
     ],
     [
       "PUBM",
-      "ANGI"
+      "MCS"
     ],
     [
-      "ATNI",
-      "BOC"
+      "EVER",
+      "NXDR"
     ],
     [
-      "SSP",
-      "AMCX"
+      "SBGI",
+      "SHEN"
     ],
     [
-      "LILA",
-      "NCMI"
+      "SCHL",
+      "NMAX"
     ],
     [
-      "NEXN",
-      "SPOK"
-    ],
-    [
-      "BMBL",
-      "RSVR"
+      "CCOI",
+      "TBLA"
     ],
     [
       "EVC",
-      "WBTN"
+      "GTN"
     ],
     [
-      "STRZ",
-      "PLTK"
+      "CARS",
+      "MNTN"
     ],
     [
-      "CURI",
+      "IBTA",
+      "BATRA"
+    ],
+    [
+      "GRND",
+      "LFTO"
+    ],
+    [
+      "AMCX",
+      "MAX"
+    ],
+    [
+      "NEXN",
+      "STRZ"
+    ],
+    [
+      "ATNI",
+      "FUBO"
+    ],
+    [
+      "LILA",
+      "BOC"
+    ],
+    [
+      "BMBL",
       "ZIP"
     ],
     [
-      "THRY",
+      "IHRT",
+      "OPTU"
+    ],
+    [
+      "WBTN",
+      "SPOK"
+    ],
+    [
+      "ANGI",
+      "RSVR"
+    ],
+    [
+      "GOGO",
+      "SSP"
+    ],
+    [
+      "NCMI",
+      "PLTK"
+    ],
+    [
+      "ADV",
+      "CURI"
+    ],
+    [
+      "SSTK",
       "TTGT"
     ],
     [
-      "GETY",
-      "GAMB"
-    ],
-    [
-      "EEX",
-      "ADV"
-    ],
-    [
-      "GAIA",
-      "MYPS"
-    ],
-    [
-      "TEAD",
-      "SEAT"
-    ],
-    [
-      "MRDN",
-      "SATS"
+      "GLIBA",
+      "CABO"
     ]
   ],
   "sector": "Communication",
   "vol_driver": "Russell 2000 Communication \u2014 small-cap sector fundamentals",
-  "source": "iShares Russell 2000 ETF (IWM) holdings"
+  "source": "iShares Russell 2000 ETF (IWM) holdings",
+  "assembled_on": "2026-10-11",
+  "source_holdings_as_of": "2026-10-08"
 }

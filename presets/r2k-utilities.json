@@ -1,106 +1,103 @@
 {
   "name": "r2k-utilities",
-  "description": "Russell 2000 Utilities (31 companies)",
+  "description": "Russell 2000 Utilities (30 companies)",
   "tickers": [
-    "OKLO",
-    "ORA",
-    "POR",
     "TXNM",
-    "BIPC",
     "SWX",
     "BKH",
+    "ORA",
+    "POR",
     "NJR",
-    "SR",
-    "OGS",
     "NWE",
+    "OGS",
+    "BIPC",
+    "SR",
     "OTTR",
-    "AVA",
-    "CPK",
-    "MGEE",
     "AWR",
-    "HE",
+    "CPK",
+    "AVA",
     "CWT",
+    "MGEE",
     "NWN",
     "HTO",
+    "HE",
     "MSEX",
     "UTL",
     "HNRG",
-    "CWCO",
     "YORW",
-    "CDZI",
+    "CWCO",
     "GNE",
     "PCYO",
-    "RGCO",
+    "CDZI",
     "MNTK",
+    "RGCO",
     "GWRS"
   ],
   "pairs": [
     [
-      "OKLO",
-      "ORA"
-    ],
-    [
-      "POR",
-      "TXNM"
-    ],
-    [
-      "BIPC",
+      "TXNM",
       "SWX"
     ],
     [
       "BKH",
+      "ORA"
+    ],
+    [
+      "POR",
       "NJR"
     ],
     [
-      "SR",
+      "NWE",
       "OGS"
     ],
     [
-      "NWE",
-      "OTTR"
+      "BIPC",
+      "SR"
     ],
     [
-      "AVA",
-      "CPK"
-    ],
-    [
-      "MGEE",
+      "OTTR",
       "AWR"
     ],
     [
-      "HE",
-      "CWT"
+      "CPK",
+      "AVA"
+    ],
+    [
+      "CWT",
+      "MGEE"
     ],
     [
       "NWN",
       "HTO"
     ],
     [
-      "MSEX",
-      "UTL"
+      "HE",
+      "MSEX"
     ],
     [
-      "HNRG",
-      "CWCO"
+      "UTL",
+      "HNRG"
     ],
     [
       "YORW",
-      "CDZI"
+      "CWCO"
     ],
     [
       "GNE",
       "PCYO"
     ],
     [
-      "RGCO",
+      "CDZI",
       "MNTK"
     ],
     [
-      "GWRS",
-      "OKLO"
+      "RGCO",
+      "GWRS"
     ]
   ],
   "sector": "Utilities",
   "vol_driver": "Russell 2000 Utilities \u2014 small-cap sector fundamentals",
-  "source": "iShares Russell 2000 ETF (IWM) holdings"
+  "source": "iShares Russell 2000 ETF (IWM) holdings",
+  "assembled_on": "2026-10-11",
+  "source_holdings_as_of": "2026-10-08"
 }
