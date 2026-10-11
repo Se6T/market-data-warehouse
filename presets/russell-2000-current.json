@@ -1979,5 +1979,18 @@
     "ZYME"
   ],
   "source_url": "https://www.ishares.com/us/products/239710/ishares-russell-2000-etf/latest-holdings.csv",
-  "source_sha256": "ff1d9311a99571e7c00a54d1e6ccec984f9d5e9437cac75df168924c765ae80b"
+  "source_sha256": "ff1d9311a99571e7c00a54d1e6ccec984f9d5e9437cac75df168924c765ae80b",
+  "source_presets": [
+    "r2k-communication.json",
+    "r2k-consumer-discretionary.json",
+    "r2k-consumer-staples.json",
+    "r2k-energy.json",
+    "r2k-financials.json",
+    "r2k-health-care.json",
+    "r2k-industrials.json",
+    "r2k-information-technology.json",
+    "r2k-materials.json",
+    "r2k-real-estate.json",
+    "r2k-utilities.json"
+  ]
 }

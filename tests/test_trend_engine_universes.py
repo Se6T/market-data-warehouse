@@ -44,8 +44,8 @@ def test_current_russell_2000_preset_is_exact_sector_union() -> None:
     current = _tickers("russell-2000-current.json")
 
     assert len(sector_files) == 11
-    assert len(sector_tickers) == len(set(sector_tickers)) == 1918
-    assert len(current) == len(set(current)) == 1918
+    assert len(sector_tickers) == len(set(sector_tickers)) == 1971
+    assert len(current) == len(set(current)) == 1971
     assert set(current) == set(sector_tickers)
     assert {"MDV", "BBBY", "TALK", "LEG", "RMAX", "TWO", "CRNX", "HLX"}.isdisjoint(
         current

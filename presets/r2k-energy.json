@@ -1,323 +1,331 @@
 {
   "name": "r2k-energy",
-  "description": "Russell 2000 Energy (104 companies)",
+  "description": "Russell 2000 Energy (106 companies)",
   "tickers": [
-    "UEC",
-    "AROC",
     "SM",
-    "RIG",
-    "VAL",
-    "NE",
-    "CNX",
-    "MGY",
-    "UUUU",
-    "KGS",
-    "CNR",
-    "MUR",
-    "GLNG",
-    "CRC",
-    "BTU",
-    "LBRT",
-    "TDW",
     "PBF",
-    "STNG",
+    "MGY",
+    "KGS",
+    "RIG",
+    "NE",
+    "MUR",
+    "AROC",
+    "INSW",
+    "CNX",
+    "VAL",
+    "GLNG",
+    "DK",
+    "UEC",
+    "CNR",
     "OII",
     "WHD",
-    "LEU",
-    "GPOR",
-    "HP",
-    "PTEN",
-    "INSW",
-    "NOG",
-    "CRGY",
-    "SDRL",
-    "DK",
-    "DHT",
     "PARR",
+    "PTEN",
+    "TDW",
     "SEI",
+    "CRC",
     "CLMT",
+    "STNG",
+    "HP",
+    "CRGY",
+    "DHT",
+    "BTU",
+    "LBRT",
     "KNTK",
+    "SDRL",
+    "NOG",
+    "LEU",
     "TNK",
-    "TALO",
-    "CRK",
-    "BORR",
-    "XPRO",
-    "NESR",
-    "LPG",
-    "WKC",
-    "SFL",
+    "GPOR",
+    "UUUU",
     "WTTR",
-    "VTOL",
-    "KOS",
+    "LPG",
+    "TALO",
+    "WKC",
+    "CVI",
     "NAT",
-    "NBR",
-    "TTI",
+    "SFL",
+    "KOS",
+    "NESR",
+    "XPRO",
     "REX",
     "INVX",
-    "GPRE",
-    "PUMP",
-    "EE",
-    "DEC",
-    "FLNG",
-    "CVI",
+    "NBR",
     "NEXT",
-    "SOC",
+    "PUMP",
+    "CRK",
+    "BORR",
+    "VTOL",
+    "HOS",
+    "GPRE",
     "AESI",
-    "CLB",
-    "OIS",
+    "FLNG",
+    "DEC",
+    "FET",
     "BKV",
     "TK",
-    "SD",
+    "TTI",
     "NVGS",
-    "FET",
-    "ASC",
-    "RES",
-    "EGY",
-    "VTS",
-    "FLOC",
-    "GEVO",
+    "EE",
     "REPX",
-    "CLNE",
+    "ASC",
+    "FLOC",
+    "SOC",
+    "EGY",
+    "RES",
+    "VTS",
+    "CLB",
+    "OIS",
+    "SD",
+    "NUAI",
+    "URG",
     "NGS",
-    "EU",
-    "RNGR",
-    "LTBR",
     "WTI",
-    "SMC",
+    "GEVO",
+    "REI",
+    "RNGR",
     "GRNT",
+    "SMC",
+    "CLNE",
     "INR",
-    "NC",
-    "NFE",
-    "ESOA",
-    "SMHI",
-    "ACDC",
-    "KGEI",
+    "LTBR",
     "HPK",
-    "EPM",
-    "BOOM",
-    "FF",
+    "HMH",
+    "EU",
+    "KGEI",
+    "SMHI",
+    "AMPY",
+    "WHK",
+    "LODE",
+    "ESOA",
+    "AREC",
+    "SND",
     "PNRG",
+    "FF",
+    "ACDC",
+    "NC",
+    "EPM",
+    "AMTX",
     "EPSN",
-    "TUSK",
-    "PROP",
-    "EP",
-    "OPAL",
-    "NXXT",
-    "VGAS",
-    "SAFX",
-    "P5N994"
+    "OPAL"
   ],
   "pairs": [
     [
-      "UEC",
-      "AROC"
-    ],
-    [
       "SM",
-      "RIG"
-    ],
-    [
-      "VAL",
-      "NE"
-    ],
-    [
-      "CNX",
-      "MGY"
-    ],
-    [
-      "UUUU",
-      "KGS"
-    ],
-    [
-      "CNR",
-      "MUR"
-    ],
-    [
-      "GLNG",
-      "CRC"
-    ],
-    [
-      "BTU",
-      "LBRT"
-    ],
-    [
-      "TDW",
       "PBF"
     ],
     [
-      "STNG",
+      "MGY",
+      "KGS"
+    ],
+    [
+      "RIG",
+      "NE"
+    ],
+    [
+      "MUR",
+      "AROC"
+    ],
+    [
+      "INSW",
+      "CNX"
+    ],
+    [
+      "VAL",
+      "GLNG"
+    ],
+    [
+      "DK",
+      "UEC"
+    ],
+    [
+      "CNR",
       "OII"
     ],
     [
       "WHD",
-      "LEU"
-    ],
-    [
-      "GPOR",
-      "HP"
-    ],
-    [
-      "PTEN",
-      "INSW"
-    ],
-    [
-      "NOG",
-      "CRGY"
-    ],
-    [
-      "SDRL",
-      "DK"
-    ],
-    [
-      "DHT",
       "PARR"
     ],
     [
-      "SEI",
-      "CLMT"
+      "PTEN",
+      "TDW"
     ],
     [
-      "KNTK",
+      "SEI",
+      "CRC"
+    ],
+    [
+      "CLMT",
+      "STNG"
+    ],
+    [
+      "HP",
+      "CRGY"
+    ],
+    [
+      "DHT",
+      "BTU"
+    ],
+    [
+      "LBRT",
+      "KNTK"
+    ],
+    [
+      "SDRL",
+      "NOG"
+    ],
+    [
+      "LEU",
       "TNK"
     ],
     [
+      "GPOR",
+      "UUUU"
+    ],
+    [
+      "WTTR",
+      "LPG"
+    ],
+    [
       "TALO",
+      "WKC"
+    ],
+    [
+      "CVI",
+      "NAT"
+    ],
+    [
+      "SFL",
+      "KOS"
+    ],
+    [
+      "NESR",
+      "XPRO"
+    ],
+    [
+      "REX",
+      "INVX"
+    ],
+    [
+      "NBR",
+      "NEXT"
+    ],
+    [
+      "PUMP",
       "CRK"
     ],
     [
       "BORR",
-      "XPRO"
+      "VTOL"
     ],
     [
-      "NESR",
-      "LPG"
-    ],
-    [
-      "WKC",
-      "SFL"
-    ],
-    [
-      "VTOL",
-      "KOS"
-    ],
-    [
-      "NAT",
-      "NBR"
-    ],
-    [
-      "TTI",
-      "REX"
-    ],
-    [
-      "INVX",
+      "HOS",
       "GPRE"
     ],
     [
-      "PUMP",
-      "EE"
-    ],
-    [
-      "DEC",
+      "AESI",
       "FLNG"
     ],
     [
-      "CVI",
-      "NEXT"
-    ],
-    [
-      "SOC",
-      "AESI"
-    ],
-    [
-      "CLB",
-      "OIS"
+      "DEC",
+      "FET"
     ],
     [
       "BKV",
       "TK"
     ],
     [
-      "SD",
+      "TTI",
       "NVGS"
     ],
     [
-      "FET",
-      "ASC"
-    ],
-    [
-      "RES",
-      "EGY"
-    ],
-    [
-      "VTS",
-      "FLOC"
-    ],
-    [
-      "GEVO",
+      "EE",
       "REPX"
     ],
     [
-      "CLNE",
+      "ASC",
+      "FLOC"
+    ],
+    [
+      "SOC",
+      "EGY"
+    ],
+    [
+      "RES",
+      "VTS"
+    ],
+    [
+      "CLB",
+      "OIS"
+    ],
+    [
+      "SD",
+      "NUAI"
+    ],
+    [
+      "URG",
       "NGS"
     ],
     [
-      "EU",
+      "WTI",
+      "GEVO"
+    ],
+    [
+      "REI",
       "RNGR"
     ],
     [
+      "GRNT",
+      "SMC"
+    ],
+    [
+      "CLNE",
+      "INR"
+    ],
+    [
       "LTBR",
-      "WTI"
-    ],
-    [
-      "SMC",
-      "GRNT"
-    ],
-    [
-      "INR",
-      "NC"
-    ],
-    [
-      "NFE",
-      "ESOA"
-    ],
-    [
-      "SMHI",
-      "ACDC"
-    ],
-    [
-      "KGEI",
       "HPK"
     ],
     [
-      "EPM",
-      "BOOM"
+      "HMH",
+      "EU"
     ],
     [
-      "FF",
-      "PNRG"
+      "KGEI",
+      "SMHI"
+    ],
+    [
+      "AMPY",
+      "WHK"
+    ],
+    [
+      "LODE",
+      "ESOA"
+    ],
+    [
+      "AREC",
+      "SND"
+    ],
+    [
+      "PNRG",
+      "FF"
+    ],
+    [
+      "ACDC",
+      "NC"
+    ],
+    [
+      "EPM",
+      "AMTX"
     ],
     [
       "EPSN",
-      "TUSK"
-    ],
-    [
-      "PROP",
-      "EP"
-    ],
-    [
-      "OPAL",
-      "NXXT"
-    ],
-    [
-      "VGAS",
-      "SAFX"
-    ],
-    [
-      "P5N994",
-      "UEC"
+      "OPAL"
     ]
   ],
   "sector": "Energy",
-  "vol_driver": "Russell 2000 Energy — small-cap sector fundamentals",
-  "source": "iShares Russell 2000 ETF (IWM) holdings"
+  "vol_driver": "Russell 2000 Energy \u2014 small-cap sector fundamentals",
+  "source": "iShares Russell 2000 ETF (IWM) holdings",
+  "assembled_on": "2026-10-11",
+  "source_holdings_as_of": "2026-10-08"
 }

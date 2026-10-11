@@ -1,76 +1,70 @@
 {
   "name": "r2k-consumer-staples",
-  "description": "Russell 2000 Consumer Staples (61 companies)",
+  "description": "Russell 2000 Consumer Staples (55 companies)",
   "tickers": [
-    "CALM",
     "PSMT",
-    "MZTI",
+    "CHEF",
+    "CALM",
     "WDFC",
     "COCO",
     "UNFI",
-    "CHEF",
     "ANDE",
-    "SPB",
-    "HLF",
     "IPAR",
-    "TPB",
+    "MZTI",
+    "SPB",
     "CENTA",
-    "SMPL",
-    "FDP",
-    "JJSF",
-    "UVV",
-    "DOLE",
-    "IMKTA",
     "ENR",
+    "HLF",
+    "SAM",
     "EPC",
-    "FIZZ",
+    "IMKTA",
+    "JJSF",
     "WMK",
+    "FLO",
     "GO",
-    "TR",
-    "VITL",
-    "ODC",
-    "SENEA",
+    "UVV",
+    "TPB",
     "UTZ",
-    "STKL",
-    "JBSS",
+    "DOLE",
+    "COTY",
+    "DMC",
+    "BRBR",
+    "ODC",
+    "SMPL",
+    "SENEA",
+    "FIZZ",
     "AVO",
     "MAMA",
-    "NATR",
-    "BGS",
-    "CVGW",
-    "CENT",
-    "NUS",
-    "VLGEA",
-    "NGVC",
-    "BYND",
+    "JBSS",
+    "ODD",
     "HNST",
-    "NAGE",
-    "MGPI",
-    "OLPX",
-    "LMNR",
-    "ALCO",
-    "USNA",
+    "VLGEA",
+    "CENT",
+    "NGVC",
+    "VITL",
+    "YSWY",
     "WEST",
-    "SKIN",
-    "MED",
+    "NUS",
+    "BGS",
+    "MGPI",
+    "OFRM",
+    "ALCO",
+    "LMNR",
     "LWAY",
-    "HFFG",
-    "ZVIA",
+    "NATR",
+    "USNA",
+    "NAGE",
     "BRCC",
-    "HAIN",
-    "WALD",
-    "LFVN",
-    "FTLF",
-    "ISPR",
+    "SUJA",
     "AFRI"
   ],
   "pairs": [
     [
-      "CALM",
-      "PSMT"
+      "PSMT",
+      "CHEF"
     ],
     [
-      "MZTI",
+      "CALM",
       "WDFC"
     ],
     [
@@ -78,119 +72,105 @@
       "UNFI"
     ],
     [
-      "CHEF",
-      "ANDE"
+      "ANDE",
+      "IPAR"
     ],
     [
-      "SPB",
-      "HLF"
-    ],
-    [
-      "IPAR",
-      "TPB"
+      "MZTI",
+      "SPB"
     ],
     [
       "CENTA",
-      "SMPL"
-    ],
-    [
-      "FDP",
-      "JJSF"
-    ],
-    [
-      "UVV",
-      "DOLE"
-    ],
-    [
-      "IMKTA",
       "ENR"
     ],
     [
-      "EPC",
-      "FIZZ"
+      "HLF",
+      "SAM"
     ],
     [
-      "WMK",
+      "EPC",
+      "IMKTA"
+    ],
+    [
+      "JJSF",
+      "WMK"
+    ],
+    [
+      "FLO",
       "GO"
     ],
     [
-      "TR",
-      "VITL"
-    ],
-    [
-      "ODC",
-      "SENEA"
+      "UVV",
+      "TPB"
     ],
     [
       "UTZ",
-      "STKL"
+      "DOLE"
     ],
     [
-      "JBSS",
+      "COTY",
+      "DMC"
+    ],
+    [
+      "BRBR",
+      "ODC"
+    ],
+    [
+      "SMPL",
+      "SENEA"
+    ],
+    [
+      "FIZZ",
       "AVO"
     ],
     [
       "MAMA",
-      "NATR"
+      "JBSS"
     ],
     [
-      "BGS",
-      "CVGW"
-    ],
-    [
-      "CENT",
-      "NUS"
-    ],
-    [
-      "VLGEA",
-      "NGVC"
-    ],
-    [
-      "BYND",
+      "ODD",
       "HNST"
     ],
     [
-      "NAGE",
-      "MGPI"
+      "VLGEA",
+      "CENT"
     ],
     [
-      "OLPX",
-      "LMNR"
+      "NGVC",
+      "VITL"
+    ],
+    [
+      "YSWY",
+      "WEST"
+    ],
+    [
+      "NUS",
+      "BGS"
+    ],
+    [
+      "MGPI",
+      "OFRM"
     ],
     [
       "ALCO",
-      "USNA"
+      "LMNR"
     ],
     [
-      "WEST",
-      "SKIN"
+      "LWAY",
+      "NATR"
     ],
     [
-      "MED",
-      "LWAY"
-    ],
-    [
-      "HFFG",
-      "ZVIA"
+      "USNA",
+      "NAGE"
     ],
     [
       "BRCC",
-      "HAIN"
-    ],
-    [
-      "WALD",
-      "LFVN"
-    ],
-    [
-      "FTLF",
-      "ISPR"
-    ],
-    [
-      "AFRI",
-      "CALM"
+      "SUJA"
     ]
   ],
   "sector": "Consumer Staples",
   "vol_driver": "Russell 2000 Consumer Staples \u2014 small-cap sector fundamentals",
-  "source": "iShares Russell 2000 ETF (IWM) holdings"
+  "source": "iShares Russell 2000 ETF (IWM) holdings",
+  "assembled_on": "2026-10-11",
+  "source_holdings_as_of": "2026-10-08"
 }

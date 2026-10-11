@@ -1,597 +1,619 @@
 {
   "name": "r2k-consumer-discretionary",
-  "description": "Russell 2000 Consumer Discretionary (195 companies)",
+  "description": "Russell 2000 Consumer Discretionary (202 companies)",
   "tickers": [
-    "IBP",
-    "TMHC",
     "EAT",
-    "BOOT",
-    "SKY",
-    "MTH",
-    "FTDR",
-    "CVCO",
-    "ANF",
-    "KTB",
-    "VSCO",
-    "ABG",
-    "LAUR",
-    "URBN",
-    "GPI",
-    "DAN",
-    "ASO",
     "LTH",
-    "PATK",
-    "TPH",
-    "SIG",
-    "SHAK",
-    "KBH",
-    "MHO",
-    "LRN",
-    "CVSA",
-    "AEO",
-    "GHC",
-    "LCII",
-    "DORM",
-    "GTX",
-    "AAP",
-    "PII",
+    "VSXY",
+    "ANF",
+    "FTDR",
     "CAKE",
-    "RRR",
-    "PHIN",
-    "GOLF",
-    "HGV",
-    "WRBY",
+    "LAUR",
+    "GTX",
+    "URBN",
+    "SKY",
+    "IBP",
+    "CVSA",
+    "CVCO",
+    "SIG",
+    "MTH",
+    "BOOT",
+    "GHC",
+    "KTB",
+    "LRN",
+    "DORM",
+    "MHO",
+    "ASO",
     "SHOO",
-    "VC",
-    "PRDO",
-    "EYE",
-    "CPRI",
-    "GRBK",
-    "GT",
-    "OSW",
+    "VGNT",
+    "DAN",
+    "ABG",
+    "PII",
     "VAC",
-    "STRA",
-    "CALY",
-    "RSI",
-    "SGHC",
-    "SONO",
-    "ADNT",
-    "BKE",
-    "CCS",
-    "KSS",
-    "UTI",
-    "FUN",
-    "SBH",
-    "PTON",
-    "FIGS",
-    "LZB",
-    "BRSL",
-    "WWW",
-    "WINA",
-    "DCH",
-    "GENI",
-    "CRI",
-    "MCRI",
-    "REAL",
-    "GIII",
-    "XPEL",
-    "GCT",
-    "UPBD",
-    "GOLD",
-    "WGO",
-    "LINC",
-    "PZZA",
-    "RVLV",
-    "LGIH",
-    "SAH",
-    "COUR",
-    "THRM",
-    "PRKS",
-    "APEI",
-    "SMP",
-    "PRSU",
-    "MATW",
-    "GBTG",
-    "FOXF",
-    "SABR",
-    "BJRI",
-    "LIND",
-    "MCW",
-    "ZGN",
-    "CBRL",
-    "ACEL",
-    "FWRG",
-    "BZH",
-    "DRVN",
-    "MNRO",
-    "CSV",
-    "SERV",
-    "CPS",
-    "SG",
-    "HOV",
-    "BBW",
-    "HZO",
-    "GDEN",
-    "BLMN",
-    "OXM",
-    "RGR",
-    "SWBI",
-    "ETD",
-    "DFH",
-    "SLDP",
-    "MBUU",
-    "UDMY",
-    "ARKO",
-    "DIN",
-    "CWH",
-    "PLAY",
-    "KRUS",
-    "MH",
-    "ARHS",
-    "TDUP",
-    "CAL",
-    "HELE",
+    "AEO",
+    "GPI",
+    "KBH",
+    "SHAK",
+    "AAP",
+    "WRBY",
     "NAVN",
+    "NWL",
+    "RRR",
+    "OSW",
+    "VC",
+    "PHIN",
+    "KSS",
+    "CALY",
+    "GOLF",
+    "RSI",
+    "PATK",
+    "HGV",
+    "PTON",
+    "PENN",
+    "SONO",
+    "LCII",
+    "PRDO",
+    "GRBK",
+    "SGHC",
+    "STRA",
+    "RH",
+    "LIND",
+    "CPRI",
+    "WWW",
+    "GENI",
+    "GCT",
+    "SBH",
+    "THRM",
+    "ADNT",
+    "CCS",
+    "FIGS",
+    "MCRI",
+    "BKE",
+    "DCH",
+    "GT",
+    "EYE",
+    "CBRL",
+    "COUR",
+    "CRI",
+    "XPEL",
+    "LZB",
+    "HOG",
+    "BJRI",
+    "FUN",
+    "PRSU",
+    "REAL",
+    "HZO",
+    "SG",
+    "WEN",
+    "GIII",
+    "BRSL",
+    "UAA",
+    "UTI",
+    "PTRN",
+    "LGIH",
+    "SMP",
+    "UPBD",
+    "RVLV",
+    "TH",
+    "WINA",
+    "APEI",
+    "GOLD",
+    "FOXF",
+    "UA",
+    "BZH",
+    "SAH",
+    "BLMN",
+    "DRVN",
+    "LINC",
+    "WGO",
+    "FWRG",
+    "SABR",
+    "PZZA",
+    "SWBI",
+    "PRKS",
+    "HELE",
+    "MATW",
+    "RGR",
+    "LCID",
+    "ZGN",
+    "ACEL",
+    "XMAX",
+    "ARHS",
+    "HOV",
+    "SLDP",
+    "ETD",
     "MOV",
-    "SCVL",
-    "SFIX",
-    "STRT",
-    "PTLO",
-    "ZUMZ",
+    "CSV",
+    "BOBS",
+    "LOCO",
+    "CAL",
+    "MBUU",
+    "CPS",
+    "FOSL",
+    "CTRN",
+    "HVT",
+    "GRPN",
+    "DIN",
+    "CRCT",
+    "OXM",
+    "GCO",
     "SVV",
     "MCFT",
-    "EVGO",
+    "MNRO",
     "SWIM",
+    "MH",
     "RCKY",
-    "GRPN",
-    "HVT",
-    "LOCO",
-    "NATH",
-    "DNUT",
-    "JOUT",
-    "JACK",
-    "HLLY",
-    "TH",
-    "GCO",
-    "BRCB",
-    "DBI",
-    "CTRN",
-    "BH",
-    "CRCT",
-    "INSE",
-    "RICK",
-    "JAKK",
-    "WOOF",
-    "POWW",
-    "FLXS",
-    "FNKO",
+    "SERV",
+    "BBW",
+    "SFIX",
+    "STRT",
+    "ARKO",
     "WEYS",
-    "EWCZ",
-    "LOVE",
-    "LEGH",
-    "LE",
-    "XPOF",
-    "CRMT",
-    "ESCA",
-    "BNED",
+    "FLXS",
+    "CWH",
+    "FNKO",
+    "KRUS",
+    "DNUT",
+    "JAKK",
+    "BH",
+    "JOUT",
+    "NATH",
     "HBB",
-    "PXED",
-    "MPAA",
+    "DFH",
+    "SHOE",
+    "PTLO",
+    "TDUP",
+    "LEGH",
+    "JACK",
+    "POWW",
+    "HLLY",
+    "DBI",
+    "WOOF",
+    "LOVE",
+    "APC",
+    "BNED",
+    "SRI",
+    "ZUMZ",
+    "PLAY",
     "JILL",
+    "XPOF",
+    "RICK",
+    "EVGO",
+    "REF",
+    "ESCA",
+    "GPRO",
+    "MPAA",
+    "NXH",
     "BALY",
-    "KLC",
-    "ONEW",
+    "PXED",
     "SGC",
-    "SNBR",
-    "BSET",
-    "AOUT",
-    "CLAR",
-    "BARK",
-    "FLWS",
+    "BRCB",
+    "LCUT",
+    "ONEW",
+    "LE",
+    "INSE",
     "ELA",
-    "LAKE",
-    "LVWR",
-    "FFAI",
-    "NRDY",
-    "MPX",
+    "BH.A",
     "CURV",
-    "COOK",
-    "ZSPC"
+    "DIBS",
+    "KLC",
+    "TRON",
+    "RDNW",
+    "FLWS",
+    "VENU",
+    "PLBY",
+    "LVWR",
+    "RENT"
   ],
   "pairs": [
     [
-      "IBP",
-      "TMHC"
-    ],
-    [
       "EAT",
-      "BOOT"
-    ],
-    [
-      "SKY",
-      "MTH"
-    ],
-    [
-      "FTDR",
-      "CVCO"
-    ],
-    [
-      "ANF",
-      "KTB"
-    ],
-    [
-      "VSCO",
-      "ABG"
-    ],
-    [
-      "LAUR",
-      "URBN"
-    ],
-    [
-      "GPI",
-      "DAN"
-    ],
-    [
-      "ASO",
       "LTH"
     ],
     [
-      "PATK",
-      "TPH"
+      "VSXY",
+      "ANF"
     ],
     [
-      "SIG",
-      "SHAK"
-    ],
-    [
-      "KBH",
-      "MHO"
-    ],
-    [
-      "LRN",
-      "CVSA"
-    ],
-    [
-      "AEO",
-      "GHC"
-    ],
-    [
-      "LCII",
-      "DORM"
-    ],
-    [
-      "GTX",
-      "AAP"
-    ],
-    [
-      "PII",
+      "FTDR",
       "CAKE"
     ],
     [
-      "RRR",
-      "PHIN"
+      "LAUR",
+      "GTX"
     ],
     [
-      "GOLF",
-      "HGV"
+      "URBN",
+      "SKY"
     ],
     [
-      "WRBY",
-      "SHOO"
+      "IBP",
+      "CVSA"
     ],
     [
-      "VC",
-      "PRDO"
+      "CVCO",
+      "SIG"
     ],
     [
-      "EYE",
-      "CPRI"
+      "MTH",
+      "BOOT"
     ],
     [
-      "GRBK",
-      "GT"
+      "GHC",
+      "KTB"
     ],
     [
-      "OSW",
+      "LRN",
+      "DORM"
+    ],
+    [
+      "MHO",
+      "ASO"
+    ],
+    [
+      "SHOO",
+      "VGNT"
+    ],
+    [
+      "DAN",
+      "ABG"
+    ],
+    [
+      "PII",
       "VAC"
     ],
     [
-      "STRA",
-      "CALY"
+      "AEO",
+      "GPI"
     ],
     [
-      "RSI",
-      "SGHC"
+      "KBH",
+      "SHAK"
     ],
     [
-      "SONO",
-      "ADNT"
-    ],
-    [
-      "BKE",
-      "CCS"
-    ],
-    [
-      "KSS",
-      "UTI"
-    ],
-    [
-      "FUN",
-      "SBH"
-    ],
-    [
-      "PTON",
-      "FIGS"
-    ],
-    [
-      "LZB"
-    ],
-    [
-      "BRSL",
-      "WWW"
-    ],
-    [
-      "WINA",
-      "DCH"
-    ],
-    [
-      "GENI",
-      "CRI"
-    ],
-    [
-      "MCRI",
-      "REAL"
-    ],
-    [
-      "GIII",
-      "XPEL"
-    ],
-    [
-      "GCT",
-      "UPBD"
-    ],
-    [
-      "GOLD",
-      "WGO"
-    ],
-    [
-      "LINC",
-      "PZZA"
-    ],
-    [
-      "RVLV",
-      "LGIH"
-    ],
-    [
-      "SAH",
-      "COUR"
-    ],
-    [
-      "THRM",
-      "PRKS"
-    ],
-    [
-      "APEI",
-      "SMP"
-    ],
-    [
-      "PRSU",
-      "MATW"
-    ],
-    [
-      "GBTG",
-      "FOXF"
-    ],
-    [
-      "SABR",
-      "BJRI"
-    ],
-    [
-      "LIND",
-      "MCW"
-    ],
-    [
-      "ZGN",
-      "CBRL"
-    ],
-    [
-      "ACEL",
-      "FWRG"
-    ],
-    [
-      "BZH",
-      "DRVN"
-    ],
-    [
-      "MNRO",
-      "CSV"
-    ],
-    [
-      "SERV",
-      "CPS"
-    ],
-    [
-      "SG",
-      "HOV"
-    ],
-    [
-      "BBW",
-      "HZO"
-    ],
-    [
-      "GDEN",
-      "BLMN"
-    ],
-    [
-      "OXM",
-      "RGR"
-    ],
-    [
-      "SWBI",
-      "ETD"
-    ],
-    [
-      "DFH",
-      "SLDP"
-    ],
-    [
-      "MBUU",
-      "UDMY"
-    ],
-    [
-      "ARKO",
-      "DIN"
-    ],
-    [
-      "CWH",
-      "PLAY"
-    ],
-    [
-      "KRUS",
-      "MH"
-    ],
-    [
-      "ARHS",
-      "TDUP"
-    ],
-    [
-      "CAL",
-      "HELE"
+      "AAP",
+      "WRBY"
     ],
     [
       "NAVN",
-      "MOV"
+      "NWL"
     ],
     [
-      "SCVL",
-      "SFIX"
+      "RRR",
+      "OSW"
     ],
     [
-      "PTLO",
-      "ZUMZ"
+      "VC",
+      "PHIN"
     ],
     [
-      "SVV",
-      "MCFT"
+      "KSS",
+      "CALY"
     ],
     [
-      "EVGO",
-      "SWIM"
+      "GOLF",
+      "RSI"
     ],
     [
-      "RCKY",
-      "GRPN"
+      "PATK",
+      "HGV"
     ],
     [
-      "HVT",
+      "PTON",
+      "PENN"
+    ],
+    [
+      "SONO",
+      "LCII"
+    ],
+    [
+      "PRDO",
+      "GRBK"
+    ],
+    [
+      "SGHC",
+      "STRA"
+    ],
+    [
+      "RH",
+      "LIND"
+    ],
+    [
+      "CPRI",
+      "WWW"
+    ],
+    [
+      "GENI",
+      "GCT"
+    ],
+    [
+      "SBH",
+      "THRM"
+    ],
+    [
+      "ADNT",
+      "CCS"
+    ],
+    [
+      "FIGS",
+      "MCRI"
+    ],
+    [
+      "BKE",
+      "DCH"
+    ],
+    [
+      "GT",
+      "EYE"
+    ],
+    [
+      "CBRL",
+      "COUR"
+    ],
+    [
+      "CRI",
+      "XPEL"
+    ],
+    [
+      "LZB",
+      "HOG"
+    ],
+    [
+      "BJRI",
+      "FUN"
+    ],
+    [
+      "PRSU",
+      "REAL"
+    ],
+    [
+      "HZO",
+      "SG"
+    ],
+    [
+      "WEN",
+      "GIII"
+    ],
+    [
+      "BRSL",
+      "UAA"
+    ],
+    [
+      "UTI",
+      "PTRN"
+    ],
+    [
+      "LGIH",
+      "SMP"
+    ],
+    [
+      "UPBD",
+      "RVLV"
+    ],
+    [
+      "TH",
+      "WINA"
+    ],
+    [
+      "APEI",
+      "GOLD"
+    ],
+    [
+      "FOXF",
+      "UA"
+    ],
+    [
+      "BZH",
+      "SAH"
+    ],
+    [
+      "BLMN",
+      "DRVN"
+    ],
+    [
+      "LINC",
+      "WGO"
+    ],
+    [
+      "FWRG",
+      "SABR"
+    ],
+    [
+      "PZZA",
+      "SWBI"
+    ],
+    [
+      "PRKS",
+      "HELE"
+    ],
+    [
+      "MATW",
+      "RGR"
+    ],
+    [
+      "LCID",
+      "ZGN"
+    ],
+    [
+      "ACEL",
+      "XMAX"
+    ],
+    [
+      "ARHS",
+      "HOV"
+    ],
+    [
+      "SLDP",
+      "ETD"
+    ],
+    [
+      "MOV",
+      "CSV"
+    ],
+    [
+      "BOBS",
       "LOCO"
     ],
     [
-      "NATH",
-      "DNUT"
+      "CAL",
+      "MBUU"
     ],
     [
-      "JOUT",
-      "JACK"
+      "CPS",
+      "FOSL"
     ],
     [
-      "HLLY",
-      "TH"
+      "CTRN",
+      "HVT"
+    ],
+    [
+      "GRPN",
+      "DIN"
+    ],
+    [
+      "CRCT",
+      "OXM"
     ],
     [
       "GCO",
-      "BRCB"
+      "SVV"
     ],
     [
-      "DBI",
-      "CTRN"
+      "MCFT",
+      "MNRO"
     ],
     [
-      "BH",
-      "CRCT"
+      "SWIM",
+      "MH"
     ],
     [
-      "INSE",
-      "RICK"
+      "RCKY",
+      "SERV"
     ],
     [
-      "JAKK",
-      "WOOF"
+      "BBW",
+      "SFIX"
     ],
     [
-      "POWW",
+      "STRT",
+      "ARKO"
+    ],
+    [
+      "WEYS",
       "FLXS"
     ],
     [
-      "FNKO",
-      "WEYS"
+      "CWH",
+      "FNKO"
     ],
     [
-      "EWCZ",
-      "LOVE"
+      "KRUS",
+      "DNUT"
     ],
     [
-      "LEGH",
-      "LE"
+      "JAKK",
+      "BH"
     ],
     [
-      "XPOF",
-      "CRMT"
-    ],
-    [
-      "ESCA",
-      "BNED"
+      "JOUT",
+      "NATH"
     ],
     [
       "HBB",
-      "PXED"
+      "DFH"
     ],
     [
-      "MPAA",
+      "SHOE",
+      "PTLO"
+    ],
+    [
+      "TDUP",
+      "LEGH"
+    ],
+    [
+      "JACK",
+      "POWW"
+    ],
+    [
+      "HLLY",
+      "DBI"
+    ],
+    [
+      "WOOF",
+      "LOVE"
+    ],
+    [
+      "APC",
+      "BNED"
+    ],
+    [
+      "SRI",
+      "ZUMZ"
+    ],
+    [
+      "PLAY",
       "JILL"
     ],
     [
+      "XPOF",
+      "RICK"
+    ],
+    [
+      "EVGO",
+      "REF"
+    ],
+    [
+      "ESCA",
+      "GPRO"
+    ],
+    [
+      "MPAA",
+      "NXH"
+    ],
+    [
       "BALY",
-      "KLC"
+      "PXED"
     ],
     [
-      "ONEW",
-      "SGC"
+      "SGC",
+      "BRCB"
     ],
     [
-      "SNBR",
-      "BSET"
+      "LCUT",
+      "ONEW"
     ],
     [
-      "AOUT",
-      "CLAR"
-    ],
-    [
-      "BARK",
-      "FLWS"
+      "LE",
+      "INSE"
     ],
     [
       "ELA",
-      "LAKE"
-    ],
-    [
-      "LVWR",
-      "FFAI"
-    ],
-    [
-      "NRDY",
-      "MPX"
+      "BH.A"
     ],
     [
       "CURV",
-      "COOK"
+      "DIBS"
     ],
     [
-      "ZSPC",
-      "IBP"
+      "KLC",
+      "TRON"
+    ],
+    [
+      "RDNW",
+      "FLWS"
+    ],
+    [
+      "VENU",
+      "PLBY"
+    ],
+    [
+      "LVWR",
+      "RENT"
     ]
   ],
   "sector": "Consumer Discretionary",
-  "vol_driver": "Russell 2000 Consumer Discretionary — small-cap sector fundamentals",
-  "source": "iShares Russell 2000 ETF (IWM) holdings"
+  "vol_driver": "Russell 2000 Consumer Discretionary \u2014 small-cap sector fundamentals",
+  "source": "iShares Russell 2000 ETF (IWM) holdings",
+  "assembled_on": "2026-10-11",
+  "source_holdings_as_of": "2026-10-08"
 }
