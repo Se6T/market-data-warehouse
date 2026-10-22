@@ -246,7 +246,7 @@ def test_success_refreshes_each_identity_and_publishes_manifest(tmp_path: Path) 
     assert len(calls) == 4
     assert any("daily_update.py" in call and "--asset-class equity" in call for call in text)
     assert any("daily_update.py" in call and "--asset-class futures" in call for call in text)
-    assert any("fetch_cboe_volatility.py" in call and "--symbols VIX" in call for call in text)
+    assert any("fetch_volatility_daily.py" in call and "--symbols VIX" in call for call in text)
     assert any("fetch_binance_crypto.py" in call and "--symbols BTC" in call for call in text)
     assert all(call.count("--result-json") == 1 for call in calls)
     assert len({call[call.index("--result-json") + 1] for call in calls}) == 4
@@ -1782,7 +1782,7 @@ def test_inventory_rejects_canonical_id_collisions(tmp_path: Path, monkeypatch) 
 def test_source_mutation_during_owner_call_blocks_publication(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
-    for name in ("daily_update.py", "fetch_cboe_volatility.py", "fetch_binance_crypto.py"):
+    for name in ("daily_update.py", "fetch_volatility_daily.py", "fetch_binance_crypto.py"):
         (repo / "scripts" / name).write_text("# committed owner\n")
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
@@ -2103,7 +2103,7 @@ def test_source_mutation_in_publication_window_blocks_and_rolls_back(
 ) -> None:
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
-    for name in ("daily_update.py", "fetch_cboe_volatility.py", "fetch_binance_crypto.py"):
+    for name in ("daily_update.py", "fetch_volatility_daily.py", "fetch_binance_crypto.py"):
         (repo / "scripts" / name).write_text("# committed owner\n")
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)

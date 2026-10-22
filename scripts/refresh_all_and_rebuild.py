@@ -599,10 +599,12 @@ def _update_argv(
     elif asset_class == "volatility":
         owner_argv = [
             python,
-            str(config.repo_root / "scripts" / "fetch_cboe_volatility.py"),
+            str(config.repo_root / "scripts" / "fetch_volatility_daily.py"),
             "--symbols", *symbols,
             "--end", config.as_of.isoformat(),
             "--warehouse", str(config.warehouse),
+            "--host", config.vxm_host,
+            "--port", str(config.vxm_port),
         ]
     else:
         owner_argv = [

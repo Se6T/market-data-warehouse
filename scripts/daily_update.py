@@ -110,7 +110,14 @@ def _make_contract(ticker: str, asset_class: str = "equity"):
     con_id = EQUITY_CONID_OVERRIDES.get(ticker)
     if con_id is not None:
         return Stock(ticker, "SMART", "USD", conId=con_id)
-    return Stock(ticker, "SMART", "USD")
+    # Keep warehouse identities stable while using the broker's proven spelling.
+    # DOMO and PSKY are same-issuer ticker changes (Nasdaq ECA2026-672 and
+    # Paramount's 2026-10-02 8-K), NOT acquirer-price substitutions.
+    ib_symbol = {
+        "BH.A": "BH A", "CRD.A": "CRD A", "GEF.B": "GEF B", "MOG.A": "MOG A",
+        "DOMO": "HUCK", "PSKY": "SKYD",
+    }.get(ticker, ticker)
+    return Stock(ib_symbol, "SMART", "USD")
 
 
 # ── Trading calendar ───────────────────────────────────────────────────

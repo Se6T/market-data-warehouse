@@ -67,6 +67,20 @@ class TestFetchCboeHistorical:
         assert len(bars) == 1
         assert bars[0]["date"] == "2025-01-02"
 
+    def test_fetch_follows_cboe_api_redirect(self):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"data": []}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("scripts.fetch_cboe_volatility.httpx.get", return_value=mock_response) as mock_get:
+            fetch_cboe_historical("VIX")
+
+        mock_get.assert_called_once_with(
+            "https://cdn.cboe.com/api/global/delayed_quotes/charts/historical/_VIX.json",
+            timeout=30,
+            follow_redirects=True,
+        )
+
     def test_fetch_empty_data(self):
         """Empty data returns empty list."""
         mock_response = MagicMock()

@@ -133,7 +133,7 @@ class DailyBarFallbackClient:
         if payload.get("status", {}).get("rCode") != 200:
             return None
 
-        rows = payload.get("data", {}).get("tradesTable", {}).get("rows", [])
+        rows = (payload.get("data") or {}).get("tradesTable", {}).get("rows", [])
         target = trade_date.strftime("%m/%d/%Y")
         for row in rows:
             if row.get("date") != target:
