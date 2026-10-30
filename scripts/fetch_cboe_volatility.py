@@ -105,7 +105,7 @@ def fetch_cboe_historical(symbol: str) -> list[dict[str, Any]]:
     url = CBOE_HISTORICAL_URL.format(symbol=symbol)
     console.print(f"  Fetching {symbol} from {url}")
     
-    resp = httpx.get(url, timeout=30)
+    resp = httpx.get(url, timeout=30, follow_redirects=True)
     resp.raise_for_status()
     
     data = resp.json()

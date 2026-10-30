@@ -147,6 +147,31 @@ class TestGetDailyBar:
         assert bar.close == 77.8
 
     @responses.activate
+    def test_falls_back_to_stooq_when_nasdaq_data_is_null(self):
+        null_payload = {
+            "data": None,
+            "message": None,
+            "status": {"rCode": 200, "bCodeMessage": None, "developerMessage": None},
+        }
+        responses.add(responses.GET, _nasdaq_url("BH.A"), json=null_payload, status=200)
+        responses.add(responses.GET, _nasdaq_url("BH.A"), json=null_payload, status=200)
+        responses.add(
+            responses.GET,
+            "https://stooq.com/q/d/l/",
+            body=(
+                "Date,Open,High,Low,Close,Volume\n"
+                "2026-03-09,10,11,9,10.5,1000\n"
+            ),
+            status=200,
+        )
+
+        with _make_client() as client:
+            bar = client.get_daily_bar("BH.A", __import__("datetime").date(2026, 3, 9))
+
+        assert bar is not None
+        assert bar.source == "stooq:us"
+
+    @responses.activate
     def test_returns_none_when_all_providers_miss(self):
         responses.add(responses.GET, _nasdaq_url("MISS"), status=404)
         responses.add(responses.GET, _nasdaq_url("MISS"), status=404)
