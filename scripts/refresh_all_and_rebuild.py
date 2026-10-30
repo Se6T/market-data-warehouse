@@ -147,6 +147,34 @@ CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 PhaseHook = Callable[[str], None]
 SourceIdentity = Callable[[Path], Mapping[str, str]]
 
+# Owner output is useful for diagnosing a degraded identity, but it is not a
+# log sink.  Keep it small and remove the common credential-bearing forms
+# before it becomes part of durable manifest/run evidence.
+MAX_OWNER_OUTPUT_BYTES = 8192
+_SENSITIVE_OUTPUT = re.compile(
+    r"(?im)^.*(?:password|passwd|secret|token|api[_ -]?key|authorization).*$"
+)
+
+
+def _bounded_owner_output(value: object) -> str:
+    text = value if isinstance(value, str) else ""
+    text = _SENSITIVE_OUTPUT.sub("[REDACTED]", text)
+    encoded = text.encode("utf-8", errors="replace")
+    if len(encoded) <= MAX_OWNER_OUTPUT_BYTES:
+        return text
+    return encoded[:MAX_OWNER_OUTPUT_BYTES].decode("utf-8", errors="ignore") + "…"
+
+
+def _owner_output_record(
+    asset_class: str, symbols: Sequence[str], result: object,
+) -> dict[str, object]:
+    return {
+        "asset_class": asset_class,
+        "symbols": list(symbols),
+        "stdout": _bounded_owner_output(getattr(result, "stdout", "")),
+        "stderr": _bounded_owner_output(getattr(result, "stderr", "")),
+    }
+
 
 def _trusted_git() -> Path:
     executable = shutil.which("git", path=os.defpath)
@@ -765,6 +793,7 @@ def _refresh_futures_owner(
     command_runner: CommandRunner,
     scratch: Path,
     verify_source: Callable[[], None],
+    owner_outputs: list[dict[str, object]] | None = None,
 ) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
     result_path = scratch / "futures-owner-result.json"
     mapping_path = scratch / "vxm-contract-mapping.json"
@@ -777,8 +806,17 @@ def _refresh_futures_owner(
     argv_sha256 = hashlib.sha256(_canonical_bytes(argv)).hexdigest()
     try:
         result = command_runner(argv)
-    except (OSError, subprocess.TimeoutExpired):
-        result = subprocess.CompletedProcess(argv, 1, "", "")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        result = subprocess.CompletedProcess(
+            argv,
+            1,
+            getattr(exc, "stdout", "") or "",
+            getattr(exc, "stderr", "") or "",
+        )
+    if owner_outputs is not None:
+        owner_outputs.append(
+            _owner_output_record("futures", [entry.symbol for entry in entries], result)
+        )
     if result.args != argv:
         raise RefreshFailure("futures owner argv mismatch")
     exit_code = int(result.returncode)
@@ -846,6 +884,7 @@ def _refresh_inventory(
     scratch: Path,
     verify_source: Callable[[], None] = lambda: None,
     steps: list[dict[str, object]] | None = None,
+    owner_outputs: list[dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     if steps is None:
         steps = []
@@ -885,6 +924,12 @@ def _refresh_inventory(
             )
             argv_sha256 = hashlib.sha256(_canonical_bytes(argv)).hexdigest()
             result = command_runner(argv)
+            if owner_outputs is not None:
+                owner_outputs.append(
+                    _owner_output_record(
+                        asset_class, [entry.symbol for entry in entries], result
+                    )
+                )
             argv_matches = result.args == argv
             exit_code = int(result.returncode)
             statuses = _read_owner_result(
@@ -895,11 +940,18 @@ def _refresh_inventory(
                 raise RefreshFailure(f"{asset_class} owner result exit status mismatch")
             if not argv_matches:
                 raise RefreshFailure(f"{asset_class} owner reported argv mismatch")
-        except (OSError, subprocess.TimeoutExpired):
+        except (OSError, subprocess.TimeoutExpired) as exc:
             # A transport-level owner failure provides class-level terminal evidence.
             # Every identity in this batch remains failed; post-refresh integrity
             # validation decides whether unchanged predecessor data may publish degraded.
-            pass
+            if owner_outputs is not None:
+                owner_outputs.append(
+                    _owner_output_record(
+                        asset_class,
+                        [entry.symbol for entry in entries],
+                        exc,
+                    )
+                )
         except Exception as exc:
             unsafe_failures.append(
                 str(exc)
@@ -1526,6 +1578,10 @@ def _run_result_path(config: RefreshConfig, run_id: str) -> Path:
 
 
 def _write_run_result(path: Path, document: Mapping[str, object]) -> None:
+    _write_run_evidence(path, document)
+
+
+def _write_run_evidence(path: Path, document: Mapping[str, object]) -> None:
     _reject_symlink_components(path.parent, "run-result directory")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     _reject_symlink_components(path.parent, "run-result directory")
@@ -1632,6 +1688,42 @@ def _failed_identity_statuses(
     ]
 
 
+def _freshness_checks(
+    inventory: Sequence[InventoryEntry],
+    steps: Sequence[Mapping[str, object]],
+    as_of: date,
+) -> list[dict[str, object]]:
+    """Report the post-refresh freshness decision for every requested identity."""
+    statuses = {
+        (str(step["asset_class"]), str(step["symbol"])): str(step["status"])
+        for step in steps
+    }
+    checks: list[dict[str, object]] = []
+    for entry in inventory:
+        expected = expected_latest_session(
+            entry.asset_class, as_of, entry.symbol
+        ).isoformat()
+        latest = entry.latest_session
+        prior = date.fromisoformat(expected) - timedelta(days=1)
+        while not is_trading_day(prior):
+            prior -= timedelta(days=1)
+        accepted_lag = (
+            entry.asset_class == "volatility"
+            and latest == prior.isoformat()
+        )
+        checks.append({
+            "asset_class": entry.asset_class,
+            "symbol": entry.symbol,
+            "latest_session": latest,
+            "expected_session": expected,
+            "status": statuses.get((entry.asset_class, entry.symbol), "not_attempted"),
+            "freshness_status": (
+                "fresh" if latest == expected else "accepted_lag" if accepted_lag else "stale"
+            ),
+        })
+    return checks
+
+
 def _run_result_document(
     config: RefreshConfig,
     *,
@@ -1670,6 +1762,30 @@ def _run_result_document(
     }
 
 
+def _ingestion_report(
+    config: RefreshConfig, *, run_id: str, started_at: str,
+    audit: Mapping[str, object], failure: BaseException | None,
+) -> dict[str, object]:
+    """Additional diagnostics stay outside the strict published manifest schema."""
+    document = _run_result_document(
+        config, run_id=run_id, started_at=started_at, audit=audit, failure=failure,
+    )
+    failed = document["failed_identities"]
+    if not isinstance(failed, list):
+        raise RefreshFailure("ingestion report failed identities must be a list")
+    document.update(
+        schema_version=1,
+        freshness_checks=audit.get("freshness_checks", []),
+        owner_outputs=audit.get("owner_outputs", []),
+        failure_summary={
+            "count": len(failed),
+            "identities": failed,
+            "error": _bounded_owner_output(str(failure)) if failure is not None else None,
+        },
+    )
+    return document
+
+
 def _refresh_all_and_rebuild_locked(
     config: RefreshConfig,
     *,
@@ -1687,6 +1803,8 @@ def _refresh_all_and_rebuild_locked(
     audit["identity"] = dict(identity)
     steps: list[dict[str, object]] = []
     audit["steps"] = steps
+    owner_outputs: list[dict[str, object]] = []
+    audit["owner_outputs"] = owner_outputs
     current_futures_contracts: dict[str, dict[str, object]] = {}
 
     before = discover_inventory(
@@ -1721,6 +1839,7 @@ def _refresh_all_and_rebuild_locked(
                     runner,
                     Path(bootstrap_name),
                     verify_source,
+                    owner_outputs,
                 )
                 steps.extend(futures_steps)
         try:
@@ -1833,6 +1952,7 @@ def _refresh_all_and_rebuild_locked(
                     _refresh_inventory(
                         execution_config, refresh_inventory, runner, presets,
                         verify_execution_source, steps,
+                        owner_outputs,
                     )
                     steps.sort(key=lambda step: (str(step["asset_class"]), str(step["symbol"])))
                     verify_execution_source()
@@ -1845,6 +1965,7 @@ def _refresh_all_and_rebuild_locked(
 
         after = discover_inventory(bronze_root, require_all_asset_classes=False)
         before_identities = {(entry.asset_class, entry.symbol) for entry in before}
+        audit["freshness_checks"] = _freshness_checks(after, steps, config.as_of)
         _validate_post_inventory(
             before,
             after,
@@ -1933,8 +2054,12 @@ def refresh_all_and_rebuild(
         result_path = _run_result_path(config, run_id)
         started_at = _utc_now()
         audit: dict[str, object] = {}
+        ingestion_path = (
+            config.warehouse / ".mdw-m0-ingestion-reports" / result_path.parent.name
+            / result_path.name
+        )
         try:
-            return _refresh_all_and_rebuild_locked(
+            manifest = _refresh_all_and_rebuild_locked(
                 config,
                 audit=audit,
                 run_id=run_id,
@@ -1943,6 +2068,27 @@ def refresh_all_and_rebuild(
                 phase_hook=phase_hook,
                 source_identity=source_identity,
             )
+            report = _ingestion_report(
+                config, run_id=run_id, started_at=started_at, audit=audit, failure=None,
+            )
+            try:
+                _write_run_evidence(ingestion_path, report)
+            except (OSError, RefreshFailure) as diagnostic_failure:
+                # The manifest is already committed. Do not falsely negate a
+                # successful publication because its optional diagnostics failed.
+                print(
+                    f"MDW ingestion WARNING: diagnostic report unavailable: "
+                    f"{type(diagnostic_failure).__name__}; target={config.as_of}",
+                    file=sys.stderr, flush=True,
+                )
+            failed = report["failed_identities"]
+            assert isinstance(failed, list)
+            print(
+                f"MDW ingestion: target={config.as_of}; outcome={report['outcome']}; "
+                f"failed={len(failed)}; full-report={ingestion_path}",
+                file=sys.stderr, flush=True,
+            )
+            return manifest
         except BaseException as failure:
             document = _run_result_document(
                 config,
@@ -1953,6 +2099,14 @@ def refresh_all_and_rebuild(
             )
             try:
                 _write_run_result(result_path, document)
+                if not ingestion_path.exists():
+                    _write_run_evidence(
+                        ingestion_path,
+                        _ingestion_report(
+                            config, run_id=run_id, started_at=started_at,
+                            audit=audit, failure=failure,
+                        ),
+                    )
             except BaseException as evidence_failure:
                 raise failure from evidence_failure
             raise

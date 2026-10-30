@@ -294,6 +294,15 @@ def test_success_refreshes_each_identity_and_publishes_manifest(tmp_path: Path) 
     assert [step["status"] for step in run_result["steps"]] == ["succeeded"] * 4
     assert len(run_result["run_id"]) == 32
     assert _run_result_paths(config) == []
+    reports = list(config.warehouse.joinpath(".mdw-m0-ingestion-reports").rglob("*.json"))
+    assert len(reports) == 1
+    report = json.loads(reports[0].read_text())
+    assert len(report["freshness_checks"]) == 4
+    assert all(row["freshness_status"] == "fresh" for row in report["freshness_checks"])
+    assert report["failure_summary"]["count"] == 0
+    assert report["owner_outputs"]
+    assert "freshness_checks" not in manifest  # strict PE consumer schema is unchanged
+    assert "freshness_checks" not in run_result
 
 
 def test_public_only_refresh_preserves_broker_assets_and_all_database_partitions(
@@ -1002,6 +1011,14 @@ def test_owner_failure_isolated_in_canonical_order_and_publishes_degraded_bundle
     ]
     assert manifest["run_result"]["failed_identities"] == manifest["failed_identities"]
     assert _run_result_paths(config) == []
+    [report_path] = list(config.warehouse.joinpath(".mdw-m0-ingestion-reports").rglob("*.json"))
+    report = json.loads(report_path.read_text())
+    assert report["outcome"] == "degraded"
+    assert report["failure_summary"]["identities"] == manifest["failed_identities"]
+    post_inventory = manifest["post_refresh_inventory"]
+    assert isinstance(post_inventory, list)
+    assert len(report["freshness_checks"]) == len(post_inventory)
+    assert any(row["status"] == "failed" for row in report["freshness_checks"])
     assert config.db_path.read_bytes() != old
     assert b"SECRET" not in config.manifest_path.read_bytes()
 
