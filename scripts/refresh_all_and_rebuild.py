@@ -162,7 +162,16 @@ def _bounded_owner_output(value: object) -> str:
     encoded = text.encode("utf-8", errors="replace")
     if len(encoded) <= MAX_OWNER_OUTPUT_BYTES:
         return text
-    return encoded[:MAX_OWNER_OUTPUT_BYTES].decode("utf-8", errors="ignore") + "…"
+    # Keep both context and the terminal per-symbol errors/summary. IB startup
+    # portfolio chatter can otherwise consume the entire diagnostic budget.
+    marker = b"\n... [output truncated] ...\n"
+    head = (MAX_OWNER_OUTPUT_BYTES - len(marker)) // 4
+    tail = MAX_OWNER_OUTPUT_BYTES - len(marker) - head
+    return (
+        encoded[:head].decode("utf-8", errors="ignore")
+        + marker.decode()
+        + encoded[-tail:].decode("utf-8", errors="ignore")
+    )
 
 
 def _owner_output_record(
@@ -1688,10 +1697,57 @@ def _failed_identity_statuses(
     ]
 
 
+def _terminal_equities(
+    config: RefreshConfig, inventory: Sequence[InventoryEntry],
+) -> dict[str, dict[str, str]]:
+    """Exclude verified retired listings without requiring complete final bars.
+
+    Retirement follows the source-backed corporate action, not success of a
+    last-bar recovery. Retain the actual existing history unchanged. OTC
+    exclusions do not claim that the security itself stopped trading or admit
+    it into the exchange-listed trading universe.
+    """
+    path = config.repo_root / "metadata" / "equity-lifecycle.json"
+    if not path.exists():
+        return {}
+    document = json.loads(path.read_text())
+    if set(document) != {"schema_version", "entries"} or document["schema_version"] != 1:
+        raise RefreshFailure("invalid equity lifecycle registry")
+    entries = document["entries"]
+    if not isinstance(entries, list):
+        raise RefreshFailure("invalid equity lifecycle entries")
+    current = {entry.symbol: entry for entry in inventory if entry.asset_class == "equity"}
+    terminal: dict[str, dict[str, str]] = {}
+    seen: set[str] = set()
+    keys = {"symbol", "last_session", "effective_date", "reason", "source_url", "source_excerpt"}
+    for entry in entries:
+        if (
+            not isinstance(entry, dict) or set(entry) != keys
+            or any(not isinstance(value, str) or not value.strip() for value in entry.values())
+            or not entry["source_url"].startswith("https://")
+            or entry["reason"] not in {"acquired", "delisted", "listing_transferred_otc"}
+            or entry["symbol"] in seen
+        ):
+            raise RefreshFailure("invalid equity lifecycle record")
+        seen.add(entry["symbol"])
+        last = date.fromisoformat(entry["last_session"])
+        effective = date.fromisoformat(entry["effective_date"])
+        if last > effective and entry["reason"] != "listing_transferred_otc":
+            raise RefreshFailure("equity lifecycle date ordering invalid")
+        item = current.get(entry["symbol"])
+        if (
+            item is not None and config.as_of >= effective
+            and item.latest_session <= config.as_of.isoformat()
+        ):
+            terminal[item.symbol] = {**entry, "last_session": item.latest_session}
+    return terminal
+
+
 def _freshness_checks(
     inventory: Sequence[InventoryEntry],
     steps: Sequence[Mapping[str, object]],
     as_of: date,
+    terminal_equities: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[dict[str, object]]:
     """Report the post-refresh freshness decision for every requested identity."""
     statuses = {
@@ -1700,9 +1756,14 @@ def _freshness_checks(
     }
     checks: list[dict[str, object]] = []
     for entry in inventory:
-        expected = expected_latest_session(
-            entry.asset_class, as_of, entry.symbol
-        ).isoformat()
+        terminal = (
+            (terminal_equities or {}).get(entry.symbol)
+            if entry.asset_class == "equity" else None
+        )
+        expected = (
+            terminal["last_session"] if terminal else
+            expected_latest_session(entry.asset_class, as_of, entry.symbol).isoformat()
+        )
         latest = entry.latest_session
         prior = date.fromisoformat(expected) - timedelta(days=1)
         while not is_trading_day(prior):
@@ -1718,8 +1779,13 @@ def _freshness_checks(
             "expected_session": expected,
             "status": statuses.get((entry.asset_class, entry.symbol), "not_attempted"),
             "freshness_status": (
-                "fresh" if latest == expected else "accepted_lag" if accepted_lag else "stale"
+                "excluded_otc" if terminal and latest == expected
+                and terminal["reason"] == "listing_transferred_otc"
+                else "retired" if terminal and latest == expected
+                else "fresh" if latest == expected
+                else "accepted_lag" if accepted_lag else "stale"
             ),
+            **({"lifecycle": dict(terminal)} if terminal else {}),
         })
     return checks
 
@@ -1904,6 +1970,14 @@ def _refresh_all_and_rebuild_locked(
                     "exit_code": None,
                     "status": "preserved",
                 })
+    terminal_equities = _terminal_equities(config, before)
+    timestamp = _utc_now()
+    for symbol in sorted(terminal_equities):
+        steps.append({
+            "asset_class": "equity", "symbol": symbol,
+            "argv_sha256": None, "started_at": timestamp,
+            "ended_at": timestamp, "exit_code": None, "status": "preserved",
+        })
     audit["inventory"] = before
     inventory_document = {
         "requested_as_of": config.as_of.isoformat(),
@@ -1945,6 +2019,9 @@ def _refresh_all_and_rebuild_locked(
                         and config.refresh_broker_assets
                         and entry.asset_class == "futures"
                     }
+                    pre_refreshed.update(
+                        ("equity", symbol) for symbol in terminal_equities
+                    )
                     refresh_inventory = [
                         entry for entry in before
                         if (entry.asset_class, entry.symbol) not in pre_refreshed
@@ -1965,7 +2042,9 @@ def _refresh_all_and_rebuild_locked(
 
         after = discover_inventory(bronze_root, require_all_asset_classes=False)
         before_identities = {(entry.asset_class, entry.symbol) for entry in before}
-        audit["freshness_checks"] = _freshness_checks(after, steps, config.as_of)
+        audit["freshness_checks"] = _freshness_checks(
+            after, steps, config.as_of, terminal_equities,
+        )
         _validate_post_inventory(
             before,
             after,

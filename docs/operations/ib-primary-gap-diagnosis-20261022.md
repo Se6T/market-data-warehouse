@@ -18,6 +18,18 @@ Scope: explain IB `Stock(symbol,SMART,USD)` Error 200 / no security definition. 
 | **WALD** | Waldencast filed Form 25 on **2026-09-24**; last Nasdaq trading expected **2026-10-02**, delisting effective about **2026-10-04**. Company planned OTC quotation under a new ticker, not Nasdaq. | Planned OTC ticker **MLKM** (company announcement); do not treat this as an exchange-listed successor until independently confirmed. | SEC-filed company release: https://www.sec.gov/Archives/edgar/data/1840199/000184019926000101/wald-delistingpressrelease.htm ; Nasdaq/company release with exact last-trading estimate: https://www.nasdaq.com/press-release/waldencast-plc-files-form-25-voluntary-delist-nasdaq-and-deregister-its-securities | High |
 | **WBD** | Paramount Skydance’s acquisition of Warner Bros. Discovery closed before market open **2026-10-06**; WBD common stock was delisted/cancelled as part of the merger. | **None for WBD**; WBD was acquired/cancelled. The post-transaction public issuer is Skydance/SKYD, but this is not WBD price continuity. | Nasdaq Trader ECA 2026-710: https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2026-710 ; SEC 8-K: https://www.sec.gov/Archives/edgar/data/1437107/000119312526415055/d200872d8k.htm | High |
 
+## October 30 follow-up
+
+The current recovery and source-backed lifecycle policy are documented in
+[`equity-daily-recovery-20261030.md`](equity-daily-recovery-20261030.md) and
+[`../../metadata/equity-lifecycle.json`](../../metadata/equity-lifecycle.json).
+The four later failures are now explained: ACA, NATH and WEAV completed cash
+acquisitions; GETY was suspended from NYSE, continued OTC under GETY, and later
+filed Chapter 11. GETY must not be described as an acquired/cancelled security.
+WALD's later issuer filing confirms OTC share ticker **MLKMF**, not the earlier
+unconfirmed MLKM. The earlier dated notes above are retained as historical
+research, not treated as the current lifecycle registry.
+
 ## Notes
 
 - The dates above explain why an IB qualification performed on 2026-10-22 can return Error 200: the old exchange-listed contracts were cancelled, delisted, or renamed before that date.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from unittest.mock import patch
 
 import requests
@@ -21,6 +22,26 @@ def _make_client(**kwargs) -> DailyBarFallbackClient:
 
 def _nasdaq_url(symbol: str) -> str:
     return f"https://api.nasdaq.com/api/quote/{symbol}/historical"
+
+
+def _yahoo_url(symbol: str) -> str:
+    return f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+
+
+def _yahoo_payload(*, timestamp: int = 1773052200) -> dict:
+    return {
+        "chart": {
+            "result": [{
+                "meta": {"exchangeTimezoneName": "America/New_York"},
+                "timestamp": [timestamp],
+                "indicators": {"quote": [{
+                    "open": [10.0], "high": [11.0], "low": [9.0],
+                    "close": [10.5], "volume": [1000],
+                }]},
+            }],
+            "error": None,
+        }
+    }
 
 
 def _nasdaq_payload(symbol: str, row: dict | None, *, asset_class: str = "stocks", rcode: int = 200) -> dict:
@@ -115,6 +136,16 @@ class TestGetDailyBar:
         assert bar is not None
         assert bar.source == "nasdaq:etf"
 
+        responses.add(responses.GET, _nasdaq_url("HUCK"), json=_nasdaq_payload("HUCK", None), status=200)
+        responses.add(responses.GET, _nasdaq_url("HUCK"), json=_nasdaq_payload("HUCK", {
+            "date": "03/09/2026", "close": "$10.5", "volume": "1000",
+            "open": "$10", "high": "$11", "low": "$9",
+        }, asset_class="etf"), status=200)
+        with _make_client() as client:
+            alias_bar = client.get_daily_bar("DOMO", date(2026, 3, 9))
+        assert alias_bar is not None
+        assert alias_bar.source == "nasdaq:etf"
+
     @responses.activate
     def test_falls_back_to_stooq_after_nasdaq_miss(self):
         responses.add(
@@ -148,28 +179,26 @@ class TestGetDailyBar:
 
     @responses.activate
     def test_falls_back_to_stooq_when_nasdaq_data_is_null(self):
-        null_payload = {
-            "data": None,
-            "message": None,
-            "status": {"rCode": 200, "bCodeMessage": None, "developerMessage": None},
-        }
+        null_payload = {"data": None, "message": None, "status": None}
         responses.add(responses.GET, _nasdaq_url("BH.A"), json=null_payload, status=200)
         responses.add(responses.GET, _nasdaq_url("BH.A"), json=null_payload, status=200)
         responses.add(
             responses.GET,
             "https://stooq.com/q/d/l/",
-            body=(
-                "Date,Open,High,Low,Close,Volume\n"
-                "2026-03-09,10,11,9,10.5,1000\n"
-            ),
+            body="Date,Open,High,Low,Close,Volume\n",
             status=200,
         )
+        responses.add(responses.GET, _yahoo_url("BH-A"), json=_yahoo_payload(), status=200)
 
-        with _make_client() as client:
-            bar = client.get_daily_bar("BH.A", __import__("datetime").date(2026, 3, 9))
+        with _make_client(min_interval_seconds=0) as client:
+            bar = client.get_daily_bar("BH.A", date(2026, 3, 9))
+            cached_bar = client.get_daily_bar("BH.A", date(2026, 3, 9))
 
         assert bar is not None
-        assert bar.source == "stooq:us"
+        assert bar == cached_bar
+        assert bar.source == "yahoo:chart"
+        assert bar.trade_date == date(2026, 3, 9)
+        assert len(responses.calls) == 4
 
     @responses.activate
     def test_returns_none_when_all_providers_miss(self):

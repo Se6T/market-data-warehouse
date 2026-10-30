@@ -366,7 +366,7 @@ def test_preserved_broker_inventory_verifies_source_once_per_batch(tmp_path: Pat
     verifier.assert_called_once_with()
 
 
-def test_preserved_broker_inventory_may_remain_stale_but_not_regress() -> None:
+def test_preserved_broker_inventory_may_remain_stale_but_not_regress(tmp_path: Path) -> None:
     entry = m0.InventoryEntry(
         "equity", "A", "asset_class=equity/symbol=A/data.parquet", "0" * 64,
         1, "2026-07-30", stable_symbol_id("A"), m0.SYMBOL_SCHEMA, "1" * 64,
@@ -380,6 +380,39 @@ def test_preserved_broker_inventory_may_remain_stale_but_not_regress() -> None:
     )
     with pytest.raises(m0.RefreshFailure, match="expected latest session"):
         m0._validate_post_inventory([entry], [entry], date(2026, 8, 21))
+
+    config = _config(tmp_path, _warehouse(tmp_path))
+    object.__setattr__(config, "as_of", date(2026, 8, 21))
+    registry = config.repo_root / "metadata" / "equity-lifecycle.json"
+    registry.parent.mkdir()
+    record = {
+        "symbol": "A", "last_session": "2026-07-30",
+        "effective_date": "2026-07-31", "reason": "acquired",
+        "source_url": "https://example.test/issuer/closing",
+        "source_excerpt": "Fixture security ceased trading before July 31 open.",
+    }
+    registry.write_text(json.dumps({"schema_version": 1, "entries": [record]}))
+    terminal = m0._terminal_equities(config, [entry])
+    assert terminal == {"A": record}
+    step = {"asset_class": "equity", "symbol": "A", "status": "preserved"}
+    [check] = m0._freshness_checks([entry], [step], config.as_of, terminal)
+    assert check["freshness_status"] == "retired"
+    assert check["expected_session"] == "2026-07-30"
+    assert check["lifecycle"] == record
+    # Verified retirement must not be blocked by a missing historical final bar.
+    older = m0.replace(entry, latest_session="2026-07-29")
+    assert m0._terminal_equities(config, [older]) == {
+        "A": {**record, "last_session": "2026-07-29"},
+    }
+    assert m0._terminal_equities(
+        config, [m0.replace(entry, latest_session="2026-08-24")],
+    ) == {}
+    # Corporate actions still cannot be applied before their effective date.
+    object.__setattr__(config, "as_of", date(2026, 7, 30))
+    assert m0._terminal_equities(config, [entry]) == {}
+    registry.write_text(json.dumps({"schema_version": 1, "entries": [record, record]}))
+    with pytest.raises(m0.RefreshFailure, match="lifecycle record"):
+        m0._terminal_equities(config, [entry])
 
 
 def test_offline_public_refresh_accepts_one_session_cboe_publication_lag() -> None:
