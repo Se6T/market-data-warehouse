@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "symbol": "ACA",
+      "last_session": "2026-10-22",
+      "effective_date": "2026-10-23",
+      "reason": "acquired",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1739445/000114036126040596/ef20084131_8k.htm",
+      "source_excerpt": "On October 23, 2026 ... Merger Sub merged with and into the Company ... as a wholly owned subsidiary of Parent; trading was halted before the opening."
+    },
+    {
+      "symbol": "ACVA",
+      "last_session": "2026-10-16",
+      "effective_date": "2026-10-16",
+      "reason": "acquired",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1637873/000119312526425225/d139534d8k.htm",
+      "source_excerpt": "On October 16, 2026, Merger Sub merged with and into ACV ... with ACV continuing as the surviving corporation and a wholly owned subsidiary of Parent; each share converted into the Offer Price in cash; NYSE suspension requested."
+    },
+    {
+      "symbol": "ATKR",
+      "last_session": "2026-10-16",
+      "effective_date": "2026-10-19",
+      "reason": "acquired",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1666138/000166613826000041/atkr-20261019.htm",
+      "source_excerpt": "The Company requested that the NYSE (i) halt trading of the Company Stock on the NYSE prior to the opening of trading on the Closing Date [October 19, 2026]."
+    },
+    {
+      "symbol": "BLFS",
+      "last_session": "2026-10-05",
+      "effective_date": "2026-10-06",
+      "reason": "acquired",
+      "source_url": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2026-716",
+      "source_excerpt": "The merger closed prior to the market open on October 6, 2026. Last Trading Date: October 5, 2026."
+    },
+    {
+      "symbol": "BZH",
+      "last_session": "2026-10-19",
+      "effective_date": "2026-10-20",
+      "reason": "acquired",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/915840/000110465926117198/tm2622398d20_8k.htm",
+      "source_excerpt": "Trading of the Shares on the NYSE was halted prior to the opening of trading on the Closing Date [October 20, 2026]."
+    },
+    {
+      "symbol": "CCO",
+      "last_session": "2026-10-13",
+      "effective_date": "2026-10-14",
+      "reason": "acquired",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1334978/000121390026109385/ea0308422-8k_clear.htm",
+      "source_excerpt": "The merger completed on October 14, 2026; common shares were converted to cash and NYSE trading suspension requested. October 13 is the retained snapshot date, not an assertion of the final trading session. Exclude the cancelled listing without requiring final-bar recovery."
+    },
+    {
+      "symbol": "DBRG",
+      "last_session": "2026-09-29",
+      "effective_date": "2026-09-30",
+      "reason": "acquired",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1679688/000110465926112148/tm2626145d9_8k.htm",
+      "source_excerpt": "NYSE was asked to suspend trading before the opening of trading on September 30, 2026; common stock converted to $16.00 in cash."
+    },
+    {
+      "symbol": "GBTG",
+      "last_session": "2026-09-28",
+      "effective_date": "2026-09-29",
+      "reason": "acquired",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1820872/000114036126037931/ef20082602_8k.htm",
+      "source_excerpt": "GBTG requested NYSE suspension prior to the opening of trading on the Closing Date [September 29, 2026]; shares automatically canceled for $9.50 cash."
+    },
+    {
+      "symbol": "GETY",
+      "last_session": "2026-10-21",
+      "effective_date": "2026-09-30",
+      "reason": "listing_transferred_otc",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1898496/000121390026105790/ea0307245-8k_getty.htm",
+      "source_excerpt": "The Common Stock was immediately suspended from trading on the NYSE. The Company Common Stock began trading on the OTC Pink Limited Market on September 30, 2026 under the symbol GETY. Existing snapshot through October 21 is retained, including its already-ingested OTC tail; this is an exchange-feed exclusion, NOT a claim that OTC trading ceased."
+    },
+    {
+      "symbol": "NATH",
+      "last_session": "2026-10-26",
+      "effective_date": "2026-10-26",
+      "reason": "acquired",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/69733/000110465926118639/tm2628126d1_8k.htm",
+      "source_excerpt": "On October 26, 2026, the Company completed the transactions; the Company became a wholly-owned subsidiary of Parent; each common share was canceled and ceased to exist; Nasdaq suspension and Form 25 removal requested."
+    },
+    {
+      "symbol": "SLP",
+      "last_session": "2026-10-05",
+      "effective_date": "2026-10-06",
+      "reason": "acquired",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1023459/000102345926000092/slp-20261006.htm",
+      "source_excerpt": "The Merger has been completed; the Company Common Shares are no longer listed on Nasdaq as of October 6, 2026."
+    },
+    {
+      "symbol": "TBPH",
+      "last_session": "2026-09-23",
+      "effective_date": "2026-09-23",
+      "reason": "acquired",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1583107/000110465926109979/tm2625984d1_8k.htm",
+      "source_excerpt": "Completion on September 23, 2026; the Company became a wholly owned subsidiary of Parent; Nasdaq suspension/delisting requested. ZYME is not substituted for TBPH history."
+    },
+    {
+      "symbol": "WALD",
+      "last_session": "2026-10-02",
+      "effective_date": "2026-10-05",
+      "reason": "listing_transferred_otc",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1840199/000184019926000127/form15pressrelease-15oct20.htm",
+      "source_excerpt": "As of October 5, the Company quoted its Class A Ordinary Shares and Warrants under the ticker MLKMF and MLKWF. The earlier issuer release identified October 2 as the expected last Nasdaq trading day; OTC prices are not admitted to the listed feed."
+    },
+    {
+      "symbol": "WBD",
+      "last_session": "2026-10-05",
+      "effective_date": "2026-10-06",
+      "reason": "acquired",
+      "source_url": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2026-710",
+      "source_excerpt": "The merger closed prior to the market open on October 6, 2026. WBD common stock was cancelled; the acquirer SKYD is not price-continuous WBD history."
+    },
+    {
+      "symbol": "WEAV",
+      "last_session": "2026-10-23",
+      "effective_date": "2026-10-26",
+      "reason": "acquired",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1609151/000160915126000120/weav-20261026.htm",
+      "source_excerpt": "Trading of the Company Common Stock on NYSE was suspended prior to the opening of trading on the Closing Date [October 26, 2026]."
+    }
+  ]
+}

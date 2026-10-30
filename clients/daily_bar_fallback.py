@@ -5,10 +5,12 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import math
 import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 from requests import Response
@@ -22,8 +24,16 @@ _DEFAULT_BACKOFF_FACTOR = 1.0
 _DEFAULT_MIN_INTERVAL_SECONDS = 0.2
 _NASDAQ_BASE_URL = "https://api.nasdaq.com/api/quote"
 _STOOQ_DAILY_URL = "https://stooq.com/q/d/l/"
+_YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
 _USER_AGENT = "market-data-warehouse/1.0"
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+_ISSUER_LOOKUP_ALIASES = {"DOMO": "HUCK", "PSKY": "SKYD"}
+_YAHOO_CLASS_SHARE_SYMBOLS = {
+    "BH.A": "BH-A",
+    "CRD.A": "CRD-A",
+    "GEF.B": "GEF-B",
+    "MOG.A": "MOG-A",
+}
 
 
 @dataclass(frozen=True)
@@ -50,6 +60,7 @@ class DailyBarFallbackClient:
     Provider order:
     1. Nasdaq historical quote API (`stocks`, then `etf`)
     2. Stooq U.S. daily CSV endpoint
+    3. Yahoo Finance chart endpoint (last-resort identity-specific fallback)
     """
 
     def __init__(
@@ -74,6 +85,9 @@ class DailyBarFallbackClient:
             tuple[str, str], tuple[date, dict | None]
         ] = {}
         self._stooq_history_cache: dict[str, str | None] = {}
+        self._yahoo_history_cache: dict[
+            str, tuple[date, date, dict | None]
+        ] = {}
         self._session.headers.update(
             {
                 "Accept": "application/json,text/csv,*/*",
@@ -92,14 +106,21 @@ class DailyBarFallbackClient:
 
     def get_daily_bar(self, symbol: str, trade_date: date) -> FallbackDailyBar | None:
         """Return a fallback OHLCV bar for ``symbol`` on ``trade_date``."""
-        lookup_symbol = symbol.upper()
+        # Provider lookup symbols may follow a completed issuer transition;
+        # the caller's canonical identity is intentionally never changed.
+        canonical_symbol = symbol.upper()
+        lookup_symbol = _ISSUER_LOOKUP_ALIASES.get(canonical_symbol, canonical_symbol)
 
         for asset_class in ("stocks", "etf"):
             bar = self._fetch_nasdaq_bar(lookup_symbol, trade_date, asset_class)
             if bar is not None:
                 return bar
 
-        return self._fetch_stooq_bar(lookup_symbol, trade_date)
+        bar = self._fetch_stooq_bar(lookup_symbol, trade_date)
+        if bar is not None:
+            return bar
+
+        return self._fetch_yahoo_bar(lookup_symbol, trade_date)
 
     def fetch_daily_bar(self, symbol: str, trade_date: date) -> FallbackDailyBar | None:
         """Backward-compatible alias for callers that use the fetch_* name."""
@@ -130,21 +151,25 @@ class DailyBarFallbackClient:
             self._nasdaq_history_cache[cache_key] = (trade_date, payload)
         if payload is None:
             return None
-        if payload.get("status", {}).get("rCode") != 200:
+        status = payload.get("status")
+        if not isinstance(status, dict) or status.get("rCode") != 200:
             return None
 
-        rows = (payload.get("data") or {}).get("tradesTable", {}).get("rows", [])
+        data = payload.get("data")
+        trades_table = data.get("tradesTable") if isinstance(data, dict) else None
+        rows = trades_table.get("rows") if isinstance(trades_table, dict) else None
+        if not isinstance(rows, list):
+            return None
         target = trade_date.strftime("%m/%d/%Y")
         for row in rows:
+            if not isinstance(row, dict):
+                continue
             if row.get("date") != target:
                 continue
-            return FallbackDailyBar(
-                trade_date=trade_date,
-                open=self._parse_decimal(row.get("open")),
-                high=self._parse_decimal(row.get("high")),
-                low=self._parse_decimal(row.get("low")),
-                close=self._parse_decimal(row.get("close")),
-                volume=self._parse_integer(row.get("volume")),
+            return self._make_bar(
+                trade_date,
+                row.get("open"), row.get("high"), row.get("low"),
+                row.get("close"), row.get("volume"),
                 source=f"nasdaq:{asset_class}",
             )
         return None
@@ -166,19 +191,98 @@ class DailyBarFallbackClient:
         for row in reader:
             if row.get("Date") != target:
                 continue
-            return FallbackDailyBar(
-                trade_date=trade_date,
-                open=self._parse_decimal(row.get("Open")),
-                high=self._parse_decimal(row.get("High")),
-                low=self._parse_decimal(row.get("Low")),
-                close=self._parse_decimal(row.get("Close")),
-                volume=self._parse_integer(row.get("Volume")),
+            return self._make_bar(
+                trade_date,
+                row.get("Open"), row.get("High"), row.get("Low"),
+                row.get("Close"), row.get("Volume"),
                 source="stooq:us",
             )
         return None
 
-    def _get_json(self, url: str, params: dict[str, Any]) -> dict | None:
-        response = self._get(url, params=params, provider_name="nasdaq")
+    def _fetch_yahoo_bar(
+        self, lookup_symbol: str, trade_date: date
+    ) -> FallbackDailyBar | None:
+        yahoo_symbol = _YAHOO_CLASS_SHARE_SYMBOLS.get(lookup_symbol, lookup_symbol)
+        cached = self._yahoo_history_cache.get(yahoo_symbol)
+        if cached is not None and cached[0] <= trade_date <= cached[1]:
+            payload = cached[2]
+        else:
+            payload = self._get_json(
+                f"{_YAHOO_CHART_URL}/{yahoo_symbol}",
+                params={"interval": "1d", "range": "3mo"},
+                provider_name="yahoo",
+            )
+            coverage = self._yahoo_coverage(payload, trade_date)
+            self._yahoo_history_cache[yahoo_symbol] = (*coverage, payload)
+        if not isinstance(payload, dict):
+            return None
+
+        chart = payload.get("chart")
+        result = chart.get("result") if isinstance(chart, dict) else None
+        result = result[0] if isinstance(result, list) and result else None
+        if not isinstance(result, dict):
+            return None
+        meta = result.get("meta")
+        timezone_name = meta.get("exchangeTimezoneName") if isinstance(meta, dict) else None
+        try:
+            if not isinstance(timezone_name, str):
+                return None
+            timezone = ZoneInfo(timezone_name)
+        except (TypeError, ValueError):
+            return None
+        timestamps = result.get("timestamp")
+        quote = result.get("indicators", {}).get("quote") if isinstance(result.get("indicators"), dict) else None
+        quote = quote[0] if isinstance(quote, list) and quote else None
+        if not isinstance(timestamps, list) or not isinstance(quote, dict):
+            return None
+        for index, timestamp in enumerate(timestamps):
+            try:
+                session_date = datetime.fromtimestamp(float(timestamp), timezone).date()
+            except (TypeError, ValueError, OverflowError, OSError):
+                continue
+            if session_date != trade_date:
+                continue
+            fields = {name: values[index] if isinstance(values, list) and index < len(values) else None
+                      for name, values in (("open", quote.get("open")), ("high", quote.get("high")),
+                                           ("low", quote.get("low")), ("close", quote.get("close")),
+                                           ("volume", quote.get("volume")))}
+            return self._make_bar(trade_date, **fields, source="yahoo:chart")
+        return None
+
+    @staticmethod
+    def _yahoo_coverage(payload: dict | None, requested: date) -> tuple[date, date]:
+        dates: list[date] = []
+        try:
+            if not isinstance(payload, dict):
+                return requested, requested
+            result = payload["chart"]["result"][0]
+            timezone_name = result["meta"]["exchangeTimezoneName"]
+            if not isinstance(timezone_name, str):
+                return requested, requested
+            timezone = ZoneInfo(timezone_name)
+            dates = [datetime.fromtimestamp(float(ts), timezone).date() for ts in result.get("timestamp", [])]
+        except (KeyError, IndexError, TypeError, ValueError, OverflowError, OSError):
+            pass
+        return (min(dates), max(dates)) if dates else (requested, requested)
+
+    @classmethod
+    def _make_bar(cls, trade_date: date, open: Any, high: Any, low: Any,
+                  close: Any, volume: Any, *, source: str) -> FallbackDailyBar | None:
+        try:
+            values = [cls._parse_decimal(value) for value in (open, high, low, close)]
+            parsed_volume = cls._parse_integer(volume)
+            if any(not math.isfinite(value) or value <= 0 for value in values) or parsed_volume < 0:
+                return None
+            return FallbackDailyBar(
+                trade_date=trade_date,
+                open=values[0], high=values[1], low=values[2], close=values[3],
+                volume=parsed_volume, source=source,
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def _get_json(self, url: str, params: dict[str, Any], provider_name: str = "nasdaq") -> dict | None:
+        response = self._get(url, params=params, provider_name=provider_name)
         if response is None:
             return None
         payload = self._safe_json(response)
